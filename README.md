@@ -9,6 +9,36 @@ A demonstration of mutual TLS (mTLS) MQTT connectivity on the MXChip AZ3166 IoT 
 - **Automatic Reconnection** - Handles connection drops gracefully
 - **JSON Telemetry** - Publishes simulated sensor data (temperature, humidity)
 - **Message Subscription** - Receives and displays incoming MQTT messages
+- **OLED Display** - Shows connection status, IP address, and telemetry data
+- **RGB LED Status** - Visual feedback for connection state
+- **Status LEDs** - WiFi, Azure, and User LEDs indicate system state
+
+## Hardware Features
+
+### OLED Display
+
+The 128x64 OLED screen shows:
+- Startup and connection progress
+- IP address when connected
+- Last published sensor values
+- Received message content
+- Error messages with codes
+
+### LED Indicators
+
+| LED | State | Meaning |
+|-----|-------|---------|
+| **RGB LED** | Blue | Initializing/Connecting WiFi |
+| | Yellow | WiFi OK, connecting to MQTT |
+| | Green | Fully connected |
+| | Red | Error/Disconnected |
+| | Magenta | Publishing message |
+| | Cyan | Message received |
+| **WiFi LED** | On | WiFi connected |
+| | Off | WiFi disconnected |
+| **Azure LED** | On | MQTT connected |
+| | Off | MQTT disconnected |
+| **User LED** | Blink | Activity (publish/receive) |
 
 ## Prerequisites
 
