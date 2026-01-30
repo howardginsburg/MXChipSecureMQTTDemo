@@ -1,0 +1,71 @@
+// ============================================================================
+// MQTT Configuration Sample
+// ============================================================================
+// 
+// Instructions:
+// 1. Rename this file to: mqtt_config.h
+// 2. Fill in your WiFi credentials, MQTT broker settings, and certificates
+// 3. The mqtt_config.h file is gitignored to protect your secrets
+//
+// Certificate format:
+// - Certificates must be PEM formatted (-----BEGIN CERTIFICATE-----)
+// - Each line must end with \n (newline escape)
+// - Use \ at the end of each line for C string continuation
+//
+// ============================================================================
+
+#ifndef MQTT_CONFIG_H
+#define MQTT_CONFIG_H
+
+// ============================================================================
+// WiFi Configuration
+// ============================================================================
+static char* WIFI_SSID = (char*)"your-wifi-ssid";
+static const char* WIFI_PASSWORD = "your-wifi-password";
+
+// ============================================================================
+// MQTT Broker Settings
+// ============================================================================
+static const char* MQTT_HOST = "your-mqtt-broker.example.com";
+static const int MQTT_PORT = 8883;
+static const char* MQTT_CLIENT_ID = "az3166-device-001";
+
+// ============================================================================
+// CA Certificate
+// The root or intermediate CA that signed your MQTT broker's certificate
+// ============================================================================
+static const char* CA_CERT = 
+"-----BEGIN CERTIFICATE-----\n"\
+"MIIDjjCCAnagAwIBAgIQAzrx5qcRqaC7KGSxHQn65TANBgkqhkiG9w0BAQsFADBh\n"\
+"... your CA certificate content here ...\n"\
+"-----END CERTIFICATE-----\n";
+
+// ============================================================================
+// Client Certificate
+// Your device's X.509 certificate for mutual TLS authentication
+// The CN (Common Name) should match MQTT_CLIENT_ID
+// ============================================================================
+static const char* CLIENT_CERT = 
+"-----BEGIN CERTIFICATE-----\n"\
+"MIICpDCCAYwCCQD...\n"\
+"... your client certificate content here ...\n"\
+"-----END CERTIFICATE-----\n";
+
+// ============================================================================
+// Client Private Key
+// Keep this secret! For production, consider storing in secure EEPROM
+// ============================================================================
+static const char* CLIENT_KEY = 
+"-----BEGIN PRIVATE KEY-----\n"\
+"MIIEvgIBADANBgkqhkiG9w0BAQEFAASC...\n"\
+"... your private key content here ...\n"\
+"-----END PRIVATE KEY-----\n";
+
+// ============================================================================
+// MQTT Topics
+// Customize these for your application
+// ============================================================================
+static const char* PUBLISH_TOPIC = "sensors/az3166/data";
+static const char* SUBSCRIBE_TOPIC = "commands/az3166/#";
+
+#endif // MQTT_CONFIG_H

@@ -1,0 +1,7 @@
+{
+    "files.associations": {
+        "mqtt_client.h": "c",
+        "agenttime.h": "c",
+        "platform.h": "c"
+    }
+}
