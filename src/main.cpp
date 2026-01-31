@@ -23,7 +23,8 @@
  */
 
 #include <AZ3166WiFi.h>
-#include "AZ3166MQTTClient.h"
+#include "AZ3166WifiClientSecure.h"
+#include <PubSubClient.h>
 #include "OledDisplay.h"
 #include "RGB_LED.h"
 #include "mqtt_config.h"
@@ -32,7 +33,8 @@
 // Hardware objects
 RGB_LED rgbLed;
 
-AZ3166MQTTClient mqttClient;
+WiFiClientSecure wifiClient;
+PubSubClient mqttClient(wifiClient);
 int messageCount = 0;
 static bool hasWifi = false;
 static bool hasMqtt = false;
@@ -92,21 +94,27 @@ int connectMQTT()
     Serial.println("  Auth: Client Certificate (X.509)");
     
     rgbLed.setColor(LED_YELLOW);
-    
-    int result = mqttClient.connectMutualTLS(
-        MQTT_HOST, MQTT_PORT, CA_CERT, CLIENT_CERT, CLIENT_KEY, MQTT_CLIENT_ID, MQTT_CLIENT_ID
-    );
-    
-    if (result != 0)
+
+    wifiClient.setCACert(CA_CERT);
+    wifiClient.setCertificate(CLIENT_CERT);
+    wifiClient.setPrivateKey(CLIENT_KEY);
+
+    mqttClient.setServer(MQTT_HOST, MQTT_PORT);
+
+    bool connected = mqttClient.connect(MQTT_CLIENT_ID, MQTT_CLIENT_ID, "");
+
+    if (!connected)
     {
+        int state = mqttClient.state();
         char errStr[20];
-        snprintf(errStr, sizeof(errStr), "Error: %d", result);
+        snprintf(errStr, sizeof(errStr), "Error: %d", state);
         updateDisplay("MQTT FAILED!", errStr, MQTT_HOST);
         Serial.print("Connection FAILED! Code: ");
-        Serial.println(result);
+        Serial.println(state);
+        return state;
     }
-    
-    return result;
+
+    return 0;
 }
 
 // Build JSON payload with sensor data
@@ -147,12 +155,12 @@ void publishTelemetry()
     
     //rgbLed.setColor(LED_MAGENTA);
     
-    int result = mqttClient.publish(PUBLISH_TOPIC, payload, strlen(payload), MQTT::QOS0);
+    bool result = mqttClient.publish(PUBLISH_TOPIC, payload);
     
-    if (result != 0)
+    if (!result)
     {
         Serial.print("    Publish failed: ");
-        Serial.println(result);
+        Serial.println(mqttClient.state());
         rgbLed.setColor(LED_RED);
         updateDisplay("Publish Error", "Failed");
     }
@@ -222,6 +230,8 @@ void setup()
     Serial.println(WiFi.localIP());
     
     updateDisplay("WiFi Connected", WiFi.localIP().get_address(), "Connecting MQTT...");
+
+    mqttClient.setBufferSize(512);
     
     int result = connectMQTT();
     
@@ -229,13 +239,17 @@ void setup()
     {
         hasMqtt = false;
         updateLEDs();
-        Serial.println("\nMQTT Error codes:");
-        Serial.println("  1 = Unacceptable protocol version");
-        Serial.println("  2 = Identifier rejected");
-        Serial.println("  3 = Server unavailable");
-        Serial.println("  4 = Bad username/password");
-        Serial.println("  5 = Not authorized");
-        Serial.println("  Negative = Network/TLS error");
+        Serial.println("\nMQTT Error codes (PubSubClient state):");
+        Serial.println("  -4 = Connection timeout");
+        Serial.println("  -3 = Connection lost");
+        Serial.println("  -2 = Connect failed");
+        Serial.println("  -1 = Disconnected");
+        Serial.println("   0 = Connected");
+        Serial.println("   1 = Bad protocol");
+        Serial.println("   2 = Bad client ID");
+        Serial.println("   3 = Unavailable");
+        Serial.println("   4 = Bad credentials");
+        Serial.println("   5 = Unauthorized");
         while (1) { delay(1000); }
     }
     
@@ -254,7 +268,7 @@ void loop()
     unsigned long now = millis();
     
     // Check connection status
-    if (!mqttClient.isConnected())
+    if (!mqttClient.connected())
     {
         hasMqtt = false;
         updateLEDs();  // Will turn off Azure LED
