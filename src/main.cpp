@@ -57,6 +57,11 @@ void updateDisplay(const char* line1, const char* line2 = NULL, const char* line
 // Update RGB LED based on connection status
 void updateLEDs()
 {
+    // Set discrete LEDs
+    digitalWrite(LED_AZURE, hasMqtt ? HIGH : LOW);      // Azure LED on when MQTT connected
+    digitalWrite(LED_USER, (hasWifi && hasMqtt) ? HIGH : LOW);  // User LED on when all good (WiFi + MQTT)
+    
+    // Set RGB LED status indicator
     if (!hasWifi)
     {
         rgbLed.setColor(LED_RED);  // No WiFi - Red
@@ -65,9 +70,103 @@ void updateLEDs()
     {
         rgbLed.setColor(LED_YELLOW);  // WiFi OK, no MQTT - Yellow
     }
+    
+}
+
+// Flash main RGB LED blue
+void flashBlue()
+{
+    rgbLed.setColor(LED_BLUE);
+    delay(500);
+    rgbLed.turnOff();  // Restore normal state
+}
+
+// Connect to MQTT broker
+int connectMQTT()
+{
+    Serial.println("\nEstablishing mutual TLS connection...");
+    Serial.print("  Broker: ");
+    Serial.println(MQTT_HOST);
+    Serial.print("  Port: ");
+    Serial.println(MQTT_PORT);
+    Serial.println("  Auth: Client Certificate (X.509)");
+    
+    rgbLed.setColor(LED_YELLOW);
+    
+    int result = mqttClient.connectMutualTLS(
+        MQTT_HOST, MQTT_PORT, CA_CERT, CLIENT_CERT, CLIENT_KEY, MQTT_CLIENT_ID, MQTT_CLIENT_ID
+    );
+    
+    if (result != 0)
+    {
+        char errStr[20];
+        snprintf(errStr, sizeof(errStr), "Error: %d", result);
+        updateDisplay("MQTT FAILED!", errStr, MQTT_HOST);
+        Serial.print("Connection FAILED! Code: ");
+        Serial.println(result);
+    }
+    
+    return result;
+}
+
+// Build JSON payload with sensor data
+void buildPayload(char* buffer, size_t size, float temp, float humidity)
+{
+    time_t now_time = time(NULL);
+    struct tm* timeinfo = localtime(&now_time);
+    char timestamp[32];
+    strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", timeinfo);
+    
+    snprintf(buffer, size,
+        "{"
+        "\"messageId\":%d,"
+        "\"temperature\":%.2f,"
+        "\"humidity\":%.2f,"
+        "\"timestamp\":\"%s\""
+        "}",
+        messageCount++,
+        temp,
+        humidity,
+        timestamp
+    );
+}
+
+// Publish telemetry data
+void publishTelemetry()
+{
+    float temperature = 20.0 + (random(200) / 10.0);
+    float humidity = 40.0 + (random(400) / 10.0);
+    
+    char payload[256];
+    buildPayload(payload, sizeof(payload), temperature, humidity);
+    
+    Serial.print("[");
+    Serial.print(messageCount);
+    Serial.print("] Publishing: ");
+    Serial.println(payload);
+    
+    //rgbLed.setColor(LED_MAGENTA);
+    
+    int result = mqttClient.publish(PUBLISH_TOPIC, payload, strlen(payload), MQTT::QOS0);
+    
+    if (result != 0)
+    {
+        Serial.print("    Publish failed: ");
+        Serial.println(result);
+        rgbLed.setColor(LED_RED);
+        updateDisplay("Publish Error", "Failed");
+    }
     else
     {
-        rgbLed.setColor(LED_GREEN);  // All connected - Green
+        Serial.println("    Sent successfully");
+        
+        char tempStr[20], humStr[20];
+        snprintf(tempStr, sizeof(tempStr), "Temp: %.1fC", temperature);
+        snprintf(humStr, sizeof(humStr), "Hum: %.1f%%", humidity);
+        updateDisplay("MQTT Active", tempStr, humStr);
+        
+        flashBlue();  // Flash main LED blue on successful send
+        updateLEDs();  // Update discrete LEDs
     }
 }
 
@@ -81,6 +180,12 @@ void setup()
     Screen.clean();
     updateDisplay("Secure MQTT", "Initializing...");
     rgbLed.turnOff();
+    
+    // Initialize discrete LEDs
+    pinMode(LED_AZURE, OUTPUT);
+    pinMode(LED_USER, OUTPUT);
+    digitalWrite(LED_AZURE, LOW);
+    digitalWrite(LED_USER, LOW);
     
     Serial.println("\n========================================");
     Serial.println("  Mutual TLS MQTT Example");
@@ -118,37 +223,12 @@ void setup()
     
     updateDisplay("WiFi Connected", WiFi.localIP().get_address(), "Connecting MQTT...");
     
-    // Connect with mutual TLS
-    Serial.println("\nEstablishing mutual TLS connection...");
-    Serial.print("  Broker: ");
-    Serial.println(MQTT_HOST);
-    Serial.print("  Port: ");
-    Serial.println(MQTT_PORT);
-    Serial.print("  Client ID: ");
-    Serial.println(MQTT_CLIENT_ID);
-    Serial.println("  Auth: Client Certificate (X.509)");
-    
-    rgbLed.setColor(LED_YELLOW);  // Connecting MQTT - Yellow
-    
-    int result = mqttClient.connectMutualTLS(
-        MQTT_HOST,
-        MQTT_PORT,
-        CA_CERT,
-        CLIENT_CERT,
-        CLIENT_KEY,
-        MQTT_CLIENT_ID,
-        MQTT_CLIENT_ID  // Also pass client ID as username for Event Grid
-    );
+    int result = connectMQTT();
     
     if (result != 0)
     {
         hasMqtt = false;
         updateLEDs();
-        
-        char errStr[20];
-        snprintf(errStr, sizeof(errStr), "Error: %d", result);
-        updateDisplay("MQTT FAILED!", errStr, MQTT_HOST);
-        Serial.println(result);
         Serial.println("\nMQTT Error codes:");
         Serial.println("  1 = Unacceptable protocol version");
         Serial.println("  2 = Identifier rejected");
@@ -170,26 +250,21 @@ void setup()
 
 void loop()
 {
-    //Serial.println("Loop start");
     static unsigned long lastPublish = 0;
     unsigned long now = millis();
     
-      
     // Check connection status
     if (!mqttClient.isConnected())
     {
         hasMqtt = false;
-        updateLEDs();
+        updateLEDs();  // Will turn off Azure LED
         updateDisplay("Disconnected!", "Reconnecting...", MQTT_HOST);
         
         Serial.println("Connection lost! Reconnecting...");
-        int result = mqttClient.connectMutualTLS(
-            MQTT_HOST, MQTT_PORT, CA_CERT, CLIENT_CERT, CLIENT_KEY, MQTT_CLIENT_ID, MQTT_CLIENT_ID
-        );
-        if (result == 0)
+        if (connectMQTT() == 0)
         {
             hasMqtt = true;
-            updateLEDs();
+            updateLEDs();  // Will set LEDs appropriately
             Serial.println("Reconnected!");
             updateDisplay("Reconnected!", MQTT_CLIENT_ID, "Ready");
         }
@@ -204,61 +279,6 @@ void loop()
     if (now - lastPublish >= 5000 || lastPublish == 0)
     {
         lastPublish = now;
-        
-        // Simulate sensor readings
-        float temperature = 20.0 + (random(200) / 10.0);  // 20.0 - 40.0
-        float humidity = 40.0 + (random(400) / 10.0);     // 40.0 - 80.0
-        
-        // Get current time
-        time_t now_time = time(NULL);
-        struct tm* timeinfo = localtime(&now_time);
-        char timestamp[32];
-        strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", timeinfo);
-        
-        // Create JSON payload
-        char payload[256];
-        snprintf(payload, sizeof(payload),
-            "{"
-            "\"messageId\":%d,"
-            "\"temperature\":%.2f,"
-            "\"humidity\":%.2f,"
-            "\"timestamp\":\"%s\""
-            "}",
-            messageCount++,
-            temperature,
-            humidity,
-            timestamp
-        );
-        
-        Serial.print("[");
-        Serial.print(messageCount);
-        Serial.print("] Publishing: ");
-        Serial.println(payload);
-        
-        rgbLed.setColor(LED_MAGENTA);  // Flash magenta during publish
-        
-        int result = mqttClient.publish(PUBLISH_TOPIC, payload, strlen(payload), MQTT::QOS0);
-        if (result != 0)
-        {
-            Serial.print("    Publish failed: ");
-            Serial.println(result);
-            rgbLed.setColor(LED_RED);
-            
-            char errStr[32];
-            snprintf(errStr, sizeof(errStr), "Pub failed: %d", result);
-            updateDisplay("Publish Error", errStr);
-        }
-        else
-        {
-            Serial.println("    Sent successfully");
-            
-            char tempStr[20], humStr[20], countStr[20];
-            snprintf(tempStr, sizeof(tempStr), "Temp: %.1fC", temperature);
-            snprintf(humStr, sizeof(humStr), "Hum:  %.1f%%", humidity);
-            snprintf(countStr, sizeof(countStr), "Msg #%d sent", messageCount);
-            updateDisplay("MQTT Active", tempStr, humStr);
-        }
-        
-        updateLEDs();  // Restore normal state
+        publishTelemetry();
     }
 }
