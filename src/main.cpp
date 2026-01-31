@@ -171,7 +171,7 @@ void publishTelemetry()
         char tempStr[20], humStr[20];
         snprintf(tempStr, sizeof(tempStr), "Temp: %.1fC", temperature);
         snprintf(humStr, sizeof(humStr), "Hum: %.1f%%", humidity);
-        updateDisplay("MQTT Active", tempStr, humStr);
+        updateDisplay(WiFi.localIP().get_address(), tempStr, humStr);
         
         flashBlue();  // Flash main LED blue on successful send
         updateLEDs();  // Update discrete LEDs
