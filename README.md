@@ -2,16 +2,30 @@
 
 A demonstration of mutual TLS (mTLS) MQTT connectivity on the MXChip AZ3166 IoT DevKit using X.509 client certificate authentication.
 
+## Important: Publish-Only Limitation
+
+**This implementation supports PUBLISH operations only.** MQTT subscriptions and message receiving are not supported due to a limitation in the MXChip's TLS socket library.
+
+### Technical Background
+
+The MXChip AZ3166 uses an embedded mbedTLS implementation (last updated 2020) with the following behavior:
+
+- When the MQTT `loop()` function attempts to read from the TLS socket during idle periods, the underlying mbedTLS library receives a `PEER_CLOSE_NOTIFY` or times out
+- These read errors propagate up to PubSubClient, which interprets them as connection loss
+- This triggers unnecessary reconnection cycles, even though the connection is actually still valid for publishing
+
+### Workaround
+
+The code intentionally skips calling `mqttClient.loop()` and only checks connection status when publishing. This provides stable publish-only operation for telemetry use cases.
+
 ## Features
 
 - **Mutual TLS Authentication** - Both client and server present certificates
-- **X.509 Client Certificates** - No username/password required for authentication
+- **X.509 Client Certificates** - No username/password required
 - **Automatic Reconnection** - Handles connection drops gracefully
 - **JSON Telemetry** - Publishes simulated sensor data (temperature, humidity)
-- **Message Subscription** - Receives and displays incoming MQTT messages
 - **OLED Display** - Shows connection status, IP address, and telemetry data
-- **RGB LED Status** - Visual feedback for connection state
-- **Status LEDs** - WiFi, Azure, and User LEDs indicate system state
+- **LED Status Indicators** - Visual feedback for connection state
 
 ## Hardware Features
 
@@ -21,32 +35,26 @@ The 128x64 OLED screen shows:
 - Startup and connection progress
 - IP address when connected
 - Last published sensor values
-- Received message content
 - Error messages with codes
 
 ### LED Indicators
 
 | LED | State | Meaning |
 |-----|-------|---------|
-| **RGB LED** | Blue | Initializing/Connecting WiFi |
-| | Yellow | WiFi OK, connecting to MQTT |
-| | Green | Fully connected |
+| **RGB LED** | Yellow | Connecting |
+| | Blue flash | Message published |
 | | Red | Error/Disconnected |
-| | Magenta | Publishing message |
-| | Cyan | Message received |
-| **WiFi LED** | On | WiFi connected |
-| | Off | WiFi disconnected |
 | **Azure LED** | On | MQTT connected |
 | | Off | MQTT disconnected |
-| **User LED** | Blink | Activity (publish/receive) |
+| **User LED** | On | WiFi + MQTT connected |
 
 ## Prerequisites
 
 - [PlatformIO](https://platformio.org/) IDE or CLI
 - MXChip AZ3166 IoT DevKit
-- MQTT broker with TLS and client certificate support (e.g., Mosquitto, Azure Event Grid, EMQX)
+- MQTT broker with TLS and client certificate support (e.g., Azure Event Grid, Mosquitto)
 - X.509 certificates:
-  - CA certificate (root or intermediate that signed the broker's cert)
+  - CA certificate (root that signed the broker's cert)
   - Client certificate
   - Client private key
 
@@ -68,7 +76,6 @@ MXChipSecureMQTTDemo/
 1. **Create the configuration file**
 
    ```bash
-   # Copy the sample configuration
    cp include/mqtt_config_sample.txt include/mqtt_config.h
    ```
 
@@ -76,11 +83,9 @@ MXChipSecureMQTTDemo/
    - WiFi credentials (SSID and password)
    - MQTT broker hostname and port
    - Client ID (must match broker configuration)
-   - PEM-formatted certificates (include `\n` for line breaks)
+   - PEM-formatted certificates
 
 ## Generating Certificates
-
-Use OpenSSL to generate a client certificate:
 
 ```bash
 # Generate private key
@@ -89,7 +94,7 @@ openssl genrsa -out client.key 2048
 # Generate certificate signing request
 openssl req -new -key client.key -out client.csr -subj "/CN=az3166-device-001"
 
-# Sign with your CA (adjust paths to your CA cert/key)
+# Sign with your CA
 openssl x509 -req -in client.csr -CA ca.crt -CAkey ca.key -CAcreateserial -out client.crt -days 365
 ```
 
@@ -106,36 +111,25 @@ pio run --target upload
 pio device monitor
 ```
 
-Or use PlatformIO IDE's build/upload buttons.
-
 ## Serial Output
-
-On successful connection:
 
 ```
 ========================================
-  Mutual TLS MQTT Example
-  Client Certificate Authentication
+  MXChip Secure MQTT (Publish-Only)
 ========================================
 
 Connecting to WiFi... Connected!
 IP: 192.168.1.100
 
-Establishing mutual TLS connection...
+Connecting to MQTT broker...
   Broker: your-mqtt-broker.example.com
-  Port: 8883
-  Client ID: az3166-device-001
-  Auth: Client Certificate (X.509)
+Connected!
 
-*** Connected with Mutual TLS! ***
+Ready. Publishing every 5 seconds...
 
-Subscribing to: commands/az3166/#
-Subscribed successfully!
-
-Ready. Publishing every 30 seconds...
-
-[1] Publishing: {"messageId":0,"temperature":25.30,"humidity":55.20,"timestamp":30}
-    Sent successfully
+[1] Published
+[2] Published
+[3] Published
 ```
 
 ## Troubleshooting
@@ -144,40 +138,45 @@ Ready. Publishing every 30 seconds...
 
 | Code | Meaning |
 |------|---------|
-| 1 | Unacceptable protocol version |
-| 2 | Client identifier rejected |
-| 3 | Server unavailable |
-| 4 | Bad username or password |
+| -4 | Connection timeout |
+| -3 | Connection lost |
+| -2 | Connect failed |
+| -1 | Disconnected |
+| 0 | Connected |
 | 5 | Not authorized |
-| Negative | Network or TLS error |
 
 ### Common Issues
 
 **Error 5 (Not authorized)**
-- Verify client certificate CN matches the client ID registered with the broker
-- Check that the CA certificate is registered with the broker
-- For Azure Event Grid: ensure client is created and permission bindings are configured
+- Verify client certificate CN matches the client ID
+- Check CA certificate is registered with the broker
+- For Azure Event Grid: ensure permission bindings are configured
 
-**TLS Handshake Failure (negative error)**
-- Verify CA certificate is correct for the broker
+**TLS Handshake Failure**
+- Verify CA certificate is correct
 - Check certificate expiration dates
-- Ensure private key matches the client certificate
+- Ensure private key matches client certificate
 
 **WiFi Connection Failed**
 - Verify SSID and password
 - Ensure 2.4GHz network (MXChip doesn't support 5GHz)
 
-## Azure Event Grid MQTT
-
-For Azure Event Grid MQTT broker:
+## Azure Event Grid MQTT Setup
 
 1. Create an Event Grid Namespace with MQTT enabled
 2. Upload your CA certificate under **Client authentication** > **CA certificates**
-3. Create a **Client** with:
-   - Authentication type: Certificate chain
-   - Client authentication name matching your certificate CN
+3. Create a **Client** with certificate chain authentication
 4. Create a **Topic space** (e.g., `testtopics/#`)
-5. Create **Permission bindings** to grant publish/subscribe access
+5. Create **Permission bindings** for publish access
+
+## Framework Modifications
+
+This project uses a modified Arduino framework for the MXChip. The following files were modified to enable stable TLS operation:
+
+- `AZ3166WiFiClientSecure.cpp` - Modified read() to prevent spurious disconnections
+- `TLSSocket.cpp` - Added close notify handling, reduced retry delays
+
+See the [framework README](https://github.com/howardginsburg/framework-arduinostm32mxchip) for details.
 
 ## License
 

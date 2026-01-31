@@ -65,6 +65,7 @@ static const char* CLIENT_KEY =
 // MQTT Topics
 // Customize these for your application
 // ============================================================================
-static const char* PUBLISH_TOPIC = "sensors/az3166/data";
+static const char* PUBLISH_TOPIC = "testtopics/topic1";
+static const char* SUBSCRIBE_TOPIC = "testtopics/topic1";
 
 #endif // MQTT_CONFIG_H
