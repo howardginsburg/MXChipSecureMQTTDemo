@@ -93,8 +93,6 @@ MXChipSecureMQTTDemo/
 You can generate self-signed certificates using OpenSSL for testing:
 https://github.com/howardginsburg/CertificateGenerator
 
-```bash
-
 ## Building and Uploading
 
 ```bash
