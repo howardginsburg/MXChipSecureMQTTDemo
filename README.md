@@ -1,31 +1,34 @@
 # MXChip AZ3166 Secure MQTT Demo
 
-A demonstration of mutual TLS (mTLS) MQTT connectivity on the MXChip AZ3166 IoT DevKit using X.509 client certificate authentication.
-
-## Important: Publish-Only Limitation
-
-**This implementation supports PUBLISH operations only.** MQTT subscriptions and message receiving are not supported due to a limitation in the MXChip's TLS socket library.
-
-### Technical Background
-
-The MXChip AZ3166 uses an embedded mbedTLS implementation (last updated 2020) with the following behavior:
-
-- When the MQTT `loop()` function attempts to read from the TLS socket during idle periods, the underlying mbedTLS library receives a `PEER_CLOSE_NOTIFY` or times out
-- These read errors propagate up to PubSubClient, which interprets them as connection loss
-- This triggers unnecessary reconnection cycles, even though the connection is actually still valid for publishing
-
-### Workaround
-
-The code intentionally skips calling `mqttClient.loop()` and only checks connection status when publishing. This provides stable publish-only operation for telemetry use cases.
+A demonstration of mutual TLS (mTLS) MQTT connectivity on the MXChip AZ3166 IoT DevKit using X.509 client certificate authentication with full publish/subscribe support.
 
 ## Features
 
 - **Mutual TLS Authentication** - Both client and server present certificates
-- **X.509 Client Certificates** - No username/password required
-- **Automatic Reconnection** - Handles connection drops gracefully
-- **JSON Telemetry** - Publishes simulated sensor data (temperature, humidity)
+- **X.509 Client Certificates** - No username/password required  
+- **Bidirectional MQTT** - Full publish and subscribe support
+- **Real Sensor Data** - Temperature, humidity, and pressure from onboard sensors
+- **Automatic Reconnection** - Handles WiFi and MQTT connection drops gracefully
+- **JSON Telemetry** - Publishes sensor data every 5 seconds
 - **OLED Display** - Shows connection status, IP address, and telemetry data
 - **LED Status Indicators** - Visual feedback for connection state
+
+## Sensors
+
+The MXChip AZ3166 includes:
+- **HTS221** - Temperature and humidity sensor
+- **LPS22HB** - Barometric pressure sensor
+
+Telemetry payload format:
+```json
+{
+  "messageId": 42,
+  "temperature": 24.50,
+  "humidity": 45.30,
+  "pressure": 1013.25,
+  "deviceId": "Device1"
+}
+```
 
 ## Hardware Features
 
@@ -62,12 +65,12 @@ The 128x64 OLED screen shows:
 
 ```
 MXChipSecureMQTTDemo/
-├── include/
-│   ├── mqtt_config.h          # Your configuration (gitignored)
-│   └── mqtt_config_sample.txt # Sample configuration template
 ├── src/
-│   └── main.cpp               # Main application code
+│   ├── main.cpp               # Main application code
+│   ├── config.h               # Your configuration (gitignored)
+│   └── config.sample.txt      # Sample configuration template
 ├── platformio.ini             # PlatformIO configuration
+├── TLSPATCH.md                # Framework patch instructions
 └── README.md
 ```
 
@@ -76,10 +79,10 @@ MXChipSecureMQTTDemo/
 1. **Create the configuration file**
 
    ```bash
-   cp include/mqtt_config_sample.txt include/mqtt_config.h
+   cp src/config.sample.txt src/config.h
    ```
 
-2. **Edit `include/mqtt_config.h`** with your values:
+2. **Edit `src/config.h`** with your values:
    - WiFi credentials (SSID and password)
    - MQTT broker hostname and port
    - Client ID (must match broker configuration)
@@ -87,16 +90,10 @@ MXChipSecureMQTTDemo/
 
 ## Generating Certificates
 
+You can generate self-signed certificates using OpenSSL for testing:
+https://github.com/howardginsburg/CertificateGenerator
+
 ```bash
-# Generate private key
-openssl genrsa -out client.key 2048
-
-# Generate certificate signing request
-openssl req -new -key client.key -out client.csr -subj "/CN=az3166-device-001"
-
-# Sign with your CA
-openssl x509 -req -in client.csr -CA ca.crt -CAkey ca.key -CAcreateserial -out client.crt -days 365
-```
 
 ## Building and Uploading
 
@@ -114,22 +111,20 @@ pio device monitor
 ## Serial Output
 
 ```
-========================================
-  MXChip Secure MQTT (Publish-Only)
-========================================
+=== MXChip Secure MQTT Demo ===
 
-Connecting to WiFi... Connected!
+Sensors initialized
+Connecting to MyWiFi... OK
 IP: 192.168.1.100
+Connecting to broker.example.com:8883...
+MQTT connected!
+Subscribed to: testtopics/topic1
+Ready!
 
-Connecting to MQTT broker...
-  Broker: your-mqtt-broker.example.com
-Connected!
+[0] {"messageId":0,"temperature":24.50,"humidity":45.30,"pressure":1013.25,"deviceId":"Device1"}
+[1] {"messageId":1,"temperature":24.62,"humidity":44.80,"pressure":1013.30,"deviceId":"Device1"}
 
-Ready. Publishing every 5 seconds...
-
-[1] Published
-[2] Published
-[3] Published
+[Message Received] testtopics/topic1: {"command":"hello"}
 ```
 
 ## Troubleshooting
@@ -163,20 +158,117 @@ Ready. Publishing every 5 seconds...
 
 ## Azure Event Grid MQTT Setup
 
-1. Create an Event Grid Namespace with MQTT enabled
-2. Upload your CA certificate under **Client authentication** > **CA certificates**
-3. Create a **Client** with certificate chain authentication
-4. Create a **Topic space** (e.g., `testtopics/#`)
-5. Create **Permission bindings** for publish access
+Azure Event Grid provides a fully managed MQTT broker with X.509 certificate authentication. Follow these steps to configure it for this demo.
 
-## Framework Modifications
+### 1. Create Event Grid Namespace
 
-This project uses a modified Arduino framework for the MXChip. The following files were modified to enable stable TLS operation:
+1. In Azure Portal, create a new **Event Grid Namespace**
+2. Under **Configuration**, enable **MQTT broker**
+3. Note the **MQTT hostname** (e.g., `yournamespace.eastus-1.ts.eventgrid.azure.net`)
 
-- `AZ3166WiFiClientSecure.cpp` - Modified read() to prevent spurious disconnections
-- `TLSSocket.cpp` - Added close notify handling, reduced retry delays
+### 2. Upload CA Certificate
 
-See the [framework README](https://github.com/howardginsburg/framework-arduinostm32mxchip) for details.
+1. Navigate to **Client authentication** > **CA certificates**
+2. Click **+ Add CA certificate**
+3. Upload your root CA certificate (PEM format)
+4. Give it a name (e.g., `DemoRootCA`)
+
+### 3. Create a Client (Device Registration)
+
+1. Go to **Clients** > **+ Add client**
+2. Configure the client:
+
+| Field | Value | Description |
+|-------|-------|-------------|
+| **Client name** | `Device1` | Logical name for the device |
+| **Authentication name** | `Device1` | Must match the MQTT Client ID |
+| **Client certificate authentication** | Enabled | Use X.509 certificates |
+| **Validation scheme** | Subject Matches | Match certificate subject |
+| **Certificate subject** | `CN=Device1` | Must match the CN in client certificate |
+
+**Subject Matches Authentication:**
+- The client certificate's Subject (CN) is validated against the configured value
+- Format: `CN=YourDeviceName` or full DN like `CN=Device1,O=Contoso,C=US`
+- This ensures only certificates with matching subjects can connect as this client
+
+### 4. Create Client Groups
+
+Client groups allow you to organize clients and assign permissions collectively.
+
+1. Go to **Client groups** > **+ Add client group**
+2. Create a group (e.g., `AllDevices`)
+3. Add a query to match clients:
+   - **Query**: `attributes.type = "sensor"` (if using attributes)
+   - Or use `$all` to match all clients
+
+**Built-in Groups:**
+- `$all` - Matches all registered clients
+
+### 5. Create Topic Spaces
+
+Topic spaces define which topics clients can publish/subscribe to.
+
+1. Go to **Topic spaces** > **+ Add topic space**
+2. Configure the topic space:
+
+| Field | Value |
+|-------|-------|
+| **Name** | `TestTopics` |
+| **Topic templates** | `testtopics/#` |
+
+**Topic Template Patterns:**
+- `testtopics/#` - All topics under testtopics/
+- `devices/${client.name}/telemetry` - Client-specific topics using variables
+- `commands/+/action` - Single-level wildcard
+
+**Supported Variables:**
+- `${client.name}` - The client's authentication name
+- `${client.attributes.xxx}` - Client attributes
+
+### 6. Create Permission Bindings
+
+Permission bindings connect client groups to topic spaces with specific permissions.
+
+1. Go to **Permission bindings** > **+ Add permission binding**
+2. Create bindings for publish and subscribe:
+
+**Publisher Binding:**
+| Field | Value |
+|-------|-------|
+| **Name** | `AllDevicesCanPublish` |
+| **Client group** | `$all` |
+| **Topic space** | `TestTopics` |
+| **Permission** | Publisher |
+
+**Subscriber Binding:**
+| Field | Value |
+|-------|-------|
+| **Name** | `AllDevicesCanSubscribe` |
+| **Client group** | `$all` |
+| **Topic space** | `TestTopics` |
+| **Permission** | Subscriber |
+
+### 7. Update Device Configuration
+
+In `src/config.h`, set:
+
+```cpp
+static const char* MQTT_HOST = "yournamespace.eastus-1.ts.eventgrid.azure.net";
+static const int MQTT_PORT = 8883;
+static const char* MQTT_CLIENT_ID = "Device1";  // Must match Client authentication name
+static const char* PUBLISH_TOPIC = "testtopics/topic1";
+static const char* SUBSCRIBE_TOPIC = "testtopics/topic1";
+```
+
+### Verification Checklist
+
+- [ ] CA certificate uploaded and shows "Valid" status
+- [ ] Client created with Subject Matches validation
+- [ ] Certificate CN matches the Client's certificate subject exactly
+- [ ] Client group includes your client (or use `$all`)
+- [ ] Topic space includes your publish/subscribe topics
+- [ ] Permission bindings grant Publisher and Subscriber access
+- [ ] MQTT_CLIENT_ID in config matches Client authentication name
 
 ## License
 

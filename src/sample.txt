@@ -1,11 +1,11 @@
 // ============================================================================
-// MQTT Configuration Sample
+// Configuration Sample
 // ============================================================================
 // 
 // Instructions:
-// 1. Rename this file to: mqtt_config.h
+// 1. Rename this file to: config.h
 // 2. Fill in your WiFi credentials, MQTT broker settings, and certificates
-// 3. The mqtt_config.h file is gitignored to protect your secrets
+// 3. The config.h file is gitignored to protect your secrets
 //
 // Certificate format:
 // - Certificates must be PEM formatted (-----BEGIN CERTIFICATE-----)
@@ -14,8 +14,8 @@
 //
 // ============================================================================
 
-#ifndef MQTT_CONFIG_H
-#define MQTT_CONFIG_H
+#ifndef CONFIG_H
+#define CONFIG_H
 
 // ============================================================================
 // WiFi Configuration
@@ -68,4 +68,4 @@ static const char* CLIENT_KEY =
 static const char* PUBLISH_TOPIC = "testtopics/topic1";
 static const char* SUBSCRIBE_TOPIC = "testtopics/topic1";
 
-#endif // MQTT_CONFIG_H
+#endif // CONFIG_H

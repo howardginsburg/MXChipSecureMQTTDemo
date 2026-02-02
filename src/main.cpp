@@ -1,23 +1,9 @@
 /**
  * @file main.cpp
- * @brief MQTT with mutual TLS (client certificate authentication)
+ * @brief Secure MQTT Demo for MXChip AZ3166
  * 
- * This example demonstrates connecting to an MQTT broker using mutual TLS,
- * where both the server and client present certificates for authentication.
- * 
- * IMPORTANT: This implementation is PUBLISH-ONLY due to TLS library limitations.
- * See README.md for details on the TLS socket behavior with Azure Event Grid.
- * 
- * Mutual TLS provides:
- * - Server authentication (client verifies server certificate)
- * - Client authentication (server verifies client certificate)
- * - No need for username/password
- * - Strong cryptographic identity
- * 
- * Setup:
- * 1. Generate a client certificate and private key for your device
- * 2. Configure your MQTT broker to require client certificates
- * 3. Update mqtt_config.h with your certificates and broker settings
+ * Demonstrates mutual TLS connection to Azure Event Grid MQTT broker
+ * with publish/subscribe messaging.
  */
 
 #include <AZ3166WiFi.h>
@@ -25,28 +11,35 @@
 #include <PubSubClient.h>
 #include "OledDisplay.h"
 #include "RGB_LED.h"
-#include "mqtt_config.h"
-#include <time.h>
+#include "config.h"
+#include "HTS221Sensor.h"
+#include "LPS22HBSensor.h"
 
-// Hardware objects
-RGB_LED rgbLed;
+// Configuration
+#define PUBLISH_INTERVAL_MS   5000
+#define WIFI_CHECK_INTERVAL   5000
 
-WiFiClientSecure wifiClient;
-PubSubClient mqttClient(wifiClient);
-int messageCount = 0;
+// LED colors
+#define LED_RED       255, 0, 0
+#define LED_BLUE      0, 0, 255
+#define LED_YELLOW    255, 255, 0
+#define LED_CYAN      0, 255, 255
+
+// Global objects
+static RGB_LED rgbLed;
+static WiFiClientSecure wifiClient;
+static PubSubClient mqttClient(wifiClient);
+static DevI2C *i2c;
+static HTS221Sensor *tempHumSensor;
+static LPS22HBSensor *pressureSensor;
+
+// State
+static int messageCount = 0;
 static bool hasWifi = false;
 static bool hasMqtt = false;
 
-// LED color definitions
-#define LED_OFF       0, 0, 0
-#define LED_RED       255, 0, 0
-#define LED_GREEN     0, 255, 0
-#define LED_BLUE      0, 0, 255
-#define LED_YELLOW    255, 255, 0
-#define LED_MAGENTA   255, 0, 255
-
 /**
- * Update OLED display with up to 3 lines
+ * Update OLED display
  */
 void updateDisplay(const char* line1, const char* line2 = NULL, const char* line3 = NULL)
 {
@@ -57,7 +50,7 @@ void updateDisplay(const char* line1, const char* line2 = NULL, const char* line
 }
 
 /**
- * Update RGB and discrete LEDs based on connection status
+ * Update LEDs based on connection status
  */
 void updateLEDs()
 {
@@ -65,38 +58,33 @@ void updateLEDs()
     digitalWrite(LED_USER, (hasWifi && hasMqtt) ? HIGH : LOW);
     
     if (!hasWifi)
-    {
         rgbLed.setColor(LED_RED);
-    }
     else if (!hasMqtt)
-    {
         rgbLed.setColor(LED_YELLOW);
-    }
+    else
+        rgbLed.turnOff();
 }
 
 /**
- * Flash RGB LED blue to indicate successful publish
+ * MQTT message callback
  */
-void flashBlue()
+void messageCallback(char* topic, byte* payload, unsigned int length)
 {
-    rgbLed.setColor(LED_BLUE);
-    delay(200);
-    rgbLed.turnOff();
+    Serial.printf("\n[Message Received] %s: ", topic);
+    Serial.write(payload, length);
+    Serial.println();
 }
 
 /**
  * Connect to MQTT broker with mutual TLS
- * @return 0 on success, error code on failure
  */
-int connectMQTT()
+bool connectMQTT()
 {
-    Serial.println("\nConnecting to MQTT broker...");
-    Serial.print("  Broker: ");
-    Serial.println(MQTT_HOST);
+    Serial.printf("Connecting to %s:%d...\n", MQTT_HOST, MQTT_PORT);
     
+    wifiClient.stop();
     rgbLed.setColor(LED_YELLOW);
 
-    // Configure TLS with certificates
     wifiClient.setTimeout(2000);
     wifiClient.setCACert(CA_CERT);
     wifiClient.setCertificate(CLIENT_CERT);
@@ -104,191 +92,170 @@ int connectMQTT()
 
     mqttClient.setServer(MQTT_HOST, MQTT_PORT);
     mqttClient.setKeepAlive(60);
+    mqttClient.setSocketTimeout(30);
 
-    // Connect with client ID (used as username for Azure Event Grid)
-    bool connected = mqttClient.connect(MQTT_CLIENT_ID, MQTT_CLIENT_ID, "");
-
-    if (!connected)
+    if (!mqttClient.connect(MQTT_CLIENT_ID, MQTT_CLIENT_ID, ""))
     {
-        int state = mqttClient.state();
-        char errStr[20];
-        snprintf(errStr, sizeof(errStr), "Error: %d", state);
-        updateDisplay("MQTT FAILED!", errStr, MQTT_HOST);
-        Serial.print("Connection failed! Code: ");
-        Serial.println(state);
-        return state;
+        Serial.printf("MQTT failed, state=%d\n", mqttClient.state());
+        return false;
     }
     
-    Serial.println("Connected!");
-    
-    // Publish immediately to establish the connection
-    char testPayload[] = "{\"status\":\"connected\"}";
-    mqttClient.publish(PUBLISH_TOPIC, testPayload);
-
-    return 0;
+    Serial.println("MQTT connected!");
+    return true;
 }
 
 /**
- * Build JSON payload with sensor data
- */
-void buildPayload(char* buffer, size_t size, float temp, float humidity)
-{
-    time_t now_time = time(NULL);
-    struct tm* timeinfo = localtime(&now_time);
-    char timestamp[32];
-    strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", timeinfo);
-    
-    snprintf(buffer, size,
-        "{"
-        "\"messageId\":%d,"
-        "\"temperature\":%.2f,"
-        "\"humidity\":%.2f,"
-        "\"timestamp\":\"%s\""
-        "}",
-        messageCount++,
-        temp,
-        humidity,
-        timestamp
-    );
-}
-
-/**
- * Publish telemetry data to MQTT broker
+ * Publish telemetry data
  */
 void publishTelemetry()
 {
-    float temperature = 20.0 + (random(200) / 10.0);
-    float humidity = 40.0 + (random(400) / 10.0);
+    if (!mqttClient.connected()) return;
+    
+    float temp = 0, humidity = 0, pressure = 0;
+    tempHumSensor->getTemperature(&temp);
+    tempHumSensor->getHumidity(&humidity);
+    pressureSensor->getPressure(&pressure);
     
     char payload[256];
-    buildPayload(payload, sizeof(payload), temperature, humidity);
+    snprintf(payload, sizeof(payload),
+        "{\"messageId\":%d,\"temperature\":%.2f,\"humidity\":%.2f,\"pressure\":%.2f,\"deviceId\":\"%s\"}",
+        messageCount++, temp, humidity, pressure, MQTT_CLIENT_ID);
     
-    Serial.print("[");
-    Serial.print(messageCount);
-    Serial.print("] ");
-    Serial.println(payload);
-    
-    bool result = mqttClient.publish(PUBLISH_TOPIC, payload);
-    
-    if (!result)
+    if (mqttClient.publish(PUBLISH_TOPIC, payload))
     {
-        Serial.println("    Publish failed!");
-        rgbLed.setColor(LED_RED);
-        updateDisplay("Publish Error", "Failed");
-    }
-    else
-    {
-        char tempStr[20], humStr[20];
-        snprintf(tempStr, sizeof(tempStr), "Temp: %.1fC", temperature);
-        snprintf(humStr, sizeof(humStr), "Hum: %.1f%%", humidity);
-        updateDisplay(WiFi.localIP().get_address(), tempStr, humStr);
+        Serial.printf("[%d] %s\n", messageCount - 1, payload);
         
-        flashBlue();
-        updateLEDs();
+        char line2[20], line3[20];
+        snprintf(line2, sizeof(line2), "T:%.1fC H:%.0f%%", temp, humidity);
+        snprintf(line3, sizeof(line3), "P:%.0f hPa", pressure);
+        updateDisplay(WiFi.localIP().get_address(), line2, line3);
+        rgbLed.setColor(LED_BLUE);
+        delay(100);
+        rgbLed.turnOff();
     }
 }
 
 void setup()
 {
     Serial.begin(115200);
-    delay(1000);
+    delay(500);
     
-    // Initialize OLED and LEDs
     Screen.init();
-    Screen.clean();
-    updateDisplay("Secure MQTT", "Initializing...");
     rgbLed.turnOff();
-    
     pinMode(LED_AZURE, OUTPUT);
     pinMode(LED_USER, OUTPUT);
-    digitalWrite(LED_AZURE, LOW);
-    digitalWrite(LED_USER, LOW);
     
-    Serial.println("\n========================================");
-    Serial.println("  MXChip Secure MQTT (Publish-Only)");
-    Serial.println("========================================\n");
+    updateDisplay("Secure MQTT", "Initializing...");
+    Serial.println("\n=== MXChip Secure MQTT Demo ===\n");
+    
+    // Initialize sensors
+    i2c = new DevI2C(D14, D15);
+    tempHumSensor = new HTS221Sensor(*i2c);
+    tempHumSensor->init(NULL);
+    tempHumSensor->enable();
+    pressureSensor = new LPS22HBSensor(*i2c);
+    pressureSensor->init(NULL);
+    Serial.println("Sensors initialized");
     
     // Connect to WiFi
-    updateDisplay("Secure MQTT", "Connecting WiFi", WIFI_SSID);
-    Serial.print("Connecting to WiFi...");
+    updateDisplay("Connecting WiFi", WIFI_SSID);
+    Serial.printf("Connecting to %s", WIFI_SSID);
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
     
-    int wifiAttempts = 0;
-    while (WiFi.status() != WL_CONNECTED && wifiAttempts < 30)
+    for (int i = 0; i < 30 && WiFi.status() != WL_CONNECTED; i++)
     {
         delay(500);
         Serial.print(".");
-        wifiAttempts++;
     }
     
     if (WiFi.status() != WL_CONNECTED)
     {
-        hasWifi = false;
-        updateLEDs();
-        updateDisplay("WiFi FAILED!", "Check config", WIFI_SSID);
-        Serial.println("\nFailed to connect to WiFi!");
-        while (1) { delay(1000); }
+        updateDisplay("WiFi FAILED!", WIFI_SSID);
+        Serial.println(" FAILED!");
+        while (1) delay(1000);
     }
     
     hasWifi = true;
-    updateLEDs();
+    Serial.printf(" OK\nIP: %s\n", WiFi.localIP().get_address());
     
-    Serial.println(" Connected!");
-    Serial.print("IP: ");
-    Serial.println(WiFi.localIP());
-    
-    updateDisplay("WiFi Connected", WiFi.localIP().get_address(), "Connecting MQTT...");
-    
-    int result = connectMQTT();
-    
-    if (result != 0)
+    // Connect to MQTT
+    updateDisplay("Connecting MQTT", MQTT_HOST);
+    if (!connectMQTT())
     {
-        hasMqtt = false;
-        updateLEDs();
-        Serial.println("\nMQTT connection failed. Check certificates and broker config.");
-        while (1) { delay(1000); }
+        updateDisplay("MQTT FAILED!", MQTT_HOST);
+        while (1) delay(1000);
     }
     
     hasMqtt = true;
     updateLEDs();
     
-    Serial.println("\nReady. Publishing every 5 seconds...\n");
-    updateDisplay("MQTT Connected", MQTT_CLIENT_ID, "Ready!");
+    mqttClient.setCallback(messageCallback);
+    mqttClient.subscribe(SUBSCRIBE_TOPIC);
+    Serial.printf("Subscribed to: %s\n", SUBSCRIBE_TOPIC);
+    
+    updateDisplay("Ready", WiFi.localIP().get_address(), MQTT_CLIENT_ID);
+    Serial.println("Ready!\n");
 }
 
 void loop()
 {
     static unsigned long lastPublish = 0;
+    static unsigned long lastWiFiCheck = 0;
     unsigned long now = millis();
     
-    // NOTE: We intentionally do NOT call mqttClient.loop() here.
-    // The MXChip's TLS library has issues with read timeouts that cause
-    // spurious disconnections. For publish-only mode, we just publish
-    // and reconnect if the socket is lost.
-    
-    // Publish every 5 seconds
-    if (now - lastPublish >= 5000 || lastPublish == 0)
+    // Check WiFi periodically
+    if (now - lastWiFiCheck >= WIFI_CHECK_INTERVAL)
     {
-        lastPublish = now;
+        lastWiFiCheck = now;
+        hasWifi = (WiFi.status() == WL_CONNECTED);
         
-        // Check if we need to reconnect
-        if (!wifiClient.connected())
+        if (!hasWifi)
         {
-            Serial.println("Reconnecting...");
             hasMqtt = false;
             updateLEDs();
-            
-            if (connectMQTT() == 0)
-            {
-                hasMqtt = true;
-                updateLEDs();
-            }
-            else
-            {
-                return;
-            }
+            Serial.println("WiFi lost, reconnecting...");
+            WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+            delay(500);
+            return;
         }
+    }
+    
+    if (!hasWifi)
+    {
+        delay(100);
+        return;
+    }
+    
+    // Handle MQTT
+    if (mqttClient.connected())
+    {
+        hasMqtt = true;
+        mqttClient.loop();
+    }
+    else
+    {
+        hasMqtt = false;
+        updateLEDs();
         
+        if (connectMQTT())
+        {
+            hasMqtt = true;
+            updateLEDs();
+            mqttClient.subscribe(SUBSCRIBE_TOPIC);
+        }
+        else
+        {
+            delay(2000);
+            return;
+        }
+    }
+    
+    // Publish telemetry
+    if (now - lastPublish >= PUBLISH_INTERVAL_MS)
+    {
+        lastPublish = now;
         publishTelemetry();
     }
+    
+    delay(10);
 }
