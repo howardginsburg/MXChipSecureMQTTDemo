@@ -3,7 +3,8 @@
  * @brief Secure MQTT Demo for MXChip AZ3166
  * 
  * Demonstrates mutual TLS connection to Azure Event Grid MQTT broker
- * with publish/subscribe messaging.
+ * with publish/subscribe messaging. Configuration is loaded from EEPROM
+ * using the DeviceConfig framework.
  */
 
 #include <AZ3166WiFi.h>
@@ -14,16 +15,7 @@
 #include "config.h"
 #include "HTS221Sensor.h"
 #include "LPS22HBSensor.h"
-
-// Configuration
-#define PUBLISH_INTERVAL_MS   5000
-#define WIFI_CHECK_INTERVAL   5000
-
-// LED colors
-#define LED_RED       255, 0, 0
-#define LED_BLUE      0, 0, 255
-#define LED_YELLOW    255, 255, 0
-#define LED_CYAN      0, 255, 255
+#include "DeviceConfig.h"
 
 // Global objects
 static RGB_LED rgbLed;
@@ -58,9 +50,9 @@ void updateLEDs()
     digitalWrite(LED_USER, (hasWifi && hasMqtt) ? HIGH : LOW);
     
     if (!hasWifi)
-        rgbLed.setColor(LED_RED);
+        rgbLed.setRed();
     else if (!hasMqtt)
-        rgbLed.setColor(LED_YELLOW);
+        rgbLed.setYellow();
     else
         rgbLed.turnOff();
 }
@@ -80,21 +72,25 @@ void messageCallback(char* topic, byte* payload, unsigned int length)
  */
 bool connectMQTT()
 {
-    Serial.printf("Connecting to %s:%d...\n", MQTT_HOST, MQTT_PORT);
+    const char* host = DeviceConfig_GetBrokerHost();
+    int port = DeviceConfig_GetBrokerPort();
+    
+    Serial.printf("Connecting to %s:%d...\n", host, port);
     
     wifiClient.stop();
-    rgbLed.setColor(LED_YELLOW);
+    rgbLed.setYellow();
 
     wifiClient.setTimeout(2000);
-    wifiClient.setCACert(CA_CERT);
-    wifiClient.setCertificate(CLIENT_CERT);
-    wifiClient.setPrivateKey(CLIENT_KEY);
+    wifiClient.setCACert(DeviceConfig_GetCACert());
+    wifiClient.setCertificate(DeviceConfig_GetClientCert());
+    wifiClient.setPrivateKey(DeviceConfig_GetClientKey());
 
-    mqttClient.setServer(MQTT_HOST, MQTT_PORT);
+    mqttClient.setServer(host, port);
     mqttClient.setKeepAlive(60);
     mqttClient.setSocketTimeout(30);
 
-    if (!mqttClient.connect(MQTT_CLIENT_ID, MQTT_CLIENT_ID, ""))
+    const char* deviceId = DeviceConfig_GetDeviceId();
+    if (!mqttClient.connect(deviceId, deviceId, ""))
     {
         Serial.printf("MQTT failed, state=%d\n", mqttClient.state());
         return false;
@@ -119,7 +115,7 @@ void publishTelemetry()
     char payload[256];
     snprintf(payload, sizeof(payload),
         "{\"messageId\":%d,\"temperature\":%.2f,\"humidity\":%.2f,\"pressure\":%.2f,\"deviceId\":\"%s\"}",
-        messageCount++, temp, humidity, pressure, MQTT_CLIENT_ID);
+        messageCount++, temp, humidity, pressure, DeviceConfig_GetDeviceId());
     
     if (mqttClient.publish(PUBLISH_TOPIC, payload))
     {
@@ -129,7 +125,7 @@ void publishTelemetry()
         snprintf(line2, sizeof(line2), "T:%.1fC H:%.0f%%", temp, humidity);
         snprintf(line3, sizeof(line3), "P:%.0f hPa", pressure);
         updateDisplay(WiFi.localIP().get_address(), line2, line3);
-        rgbLed.setColor(LED_BLUE);
+        rgbLed.setBlue();
         delay(100);
         rgbLed.turnOff();
     }
@@ -147,6 +143,7 @@ void setup()
     
     updateDisplay("Secure MQTT", "Initializing...");
     Serial.println("\n=== MXChip Secure MQTT Demo ===\n");
+    Serial.printf("Profile: %s\n", DeviceConfig_GetProfileName());
     
     // Initialize sensors
     i2c = new DevI2C(D14, D15);
@@ -157,32 +154,22 @@ void setup()
     pressureSensor->init(NULL);
     Serial.println("Sensors initialized");
     
-    // Connect to WiFi
-    updateDisplay("Connecting WiFi", WIFI_SSID);
-    Serial.printf("Connecting to %s", WIFI_SSID);
-    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-    
-    for (int i = 0; i < 30 && WiFi.status() != WL_CONNECTED; i++)
+    // Connect to WiFi (uses EEPROM credentials via DeviceConfig)
+    updateDisplay("Connecting WiFi", DeviceConfig_GetWifiSsid());
+    if (WiFi.begin() != WL_CONNECTED)
     {
-        delay(500);
-        Serial.print(".");
-    }
-    
-    if (WiFi.status() != WL_CONNECTED)
-    {
-        updateDisplay("WiFi FAILED!", WIFI_SSID);
-        Serial.println(" FAILED!");
+        updateDisplay("WiFi FAILED!", DeviceConfig_GetWifiSsid());
         while (1) delay(1000);
     }
     
     hasWifi = true;
-    Serial.printf(" OK\nIP: %s\n", WiFi.localIP().get_address());
+    Serial.printf("IP: %s\n", WiFi.localIP().get_address());
     
     // Connect to MQTT
-    updateDisplay("Connecting MQTT", MQTT_HOST);
+    updateDisplay("Connecting MQTT", DeviceConfig_GetBrokerHost());
     if (!connectMQTT())
     {
-        updateDisplay("MQTT FAILED!", MQTT_HOST);
+        updateDisplay("MQTT FAILED!", DeviceConfig_GetBrokerHost());
         while (1) delay(1000);
     }
     
@@ -193,7 +180,7 @@ void setup()
     mqttClient.subscribe(SUBSCRIBE_TOPIC);
     Serial.printf("Subscribed to: %s\n", SUBSCRIBE_TOPIC);
     
-    updateDisplay("Ready", WiFi.localIP().get_address(), MQTT_CLIENT_ID);
+    updateDisplay("Ready", WiFi.localIP().get_address(), DeviceConfig_GetDeviceId());
     Serial.println("Ready!\n");
 }
 
@@ -214,8 +201,7 @@ void loop()
             hasMqtt = false;
             updateLEDs();
             Serial.println("WiFi lost, reconnecting...");
-            WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-            delay(500);
+            WiFi.begin();
             return;
         }
     }
