@@ -18,15 +18,22 @@ A demonstration of mutual TLS (mTLS) MQTT connectivity on the MXChip AZ3166 IoT 
 The MXChip AZ3166 includes:
 - **HTS221** - Temperature and humidity sensor
 - **LPS22HB** - Barometric pressure sensor
+- **LSM6DSL** - 6-axis accelerometer and gyroscope
+- **LIS2MDL** - 3-axis magnetometer
+
+All sensors are automatically initialized by the framework via the global `Sensors` singleton.
 
 Telemetry payload format:
 ```json
 {
   "messageId": 42,
+  "deviceId": "Device1",
   "temperature": 24.50,
   "humidity": 45.30,
   "pressure": 1013.25,
-  "deviceId": "Device1"
+  "accelerometer": { "x": 10, "y": -5, "z": 980 },
+  "gyroscope": { "x": 100, "y": -200, "z": 50 },
+  "magnetometer": { "x": 150, "y": -300, "z": 500 }
 }
 ```
 
@@ -67,26 +74,76 @@ The 128x64 OLED screen shows:
 MXChipSecureMQTTDemo/
 ├── src/
 │   ├── main.cpp               # Main application code
-│   ├── config.h               # Your configuration (gitignored)
-│   └── config.sample.txt      # Sample configuration template
+│   └── config.h               # MQTT topics and timing intervals
 ├── platformio.ini             # PlatformIO configuration
-├── TLSPATCH.md                # Framework patch instructions
 └── README.md
 ```
 
 ## Configuration
 
-1. **Create the configuration file**
+The MXChip stores all connection settings (WiFi, certificates, broker URL, etc.) in the STSAFE secure element's EEPROM. You configure the device using the **Web Configuration UI** (recommended) or the serial **Configuration CLI**.
 
-   ```bash
-   cp src/config.sample.txt src/config.h
-   ```
+### Web Configuration UI (Recommended)
 
-2. **Edit `src/config.h`** with your values:
-   - WiFi credentials (SSID and password)
-   - MQTT broker hostname and port
-   - Client ID (must match broker configuration)
-   - PEM-formatted certificates
+The web UI is the easiest way to configure the device — paste certificates directly without any special formatting.
+
+1. Hold **Button B** while pressing **Reset** to enter AP mode
+2. The OLED display shows the AP name (e.g., `AZ3166_XXXXXX`) and IP `192.168.0.1`
+3. Connect your computer/phone to the device's WiFi access point
+4. Open a browser and navigate to `http://192.168.0.1`
+5. Fill in the form:
+   - **Wi-Fi**: Select your network from the dropdown (or enter manually) and enter the password
+   - **Broker URL**: Your MQTT broker endpoint (e.g., `mqtts://yournamespace.eastus-1.ts.eventgrid.azure.net:8883`)
+   - **CA Certificate**: Paste the full PEM certificate including `-----BEGIN CERTIFICATE-----` and `-----END CERTIFICATE-----` lines
+   - **Client Certificate**: Paste your device's client certificate (PEM)
+   - **Client Private Key**: Paste your device's private key (PEM)
+6. Click **Save Configuration** — the device will save to EEPROM and reboot
+
+### Configuration CLI (Alternative)
+
+For scripting or headless setups, use the serial console.
+
+1. Hold **Button A** while pressing **Reset** to enter configuration mode
+2. Connect via serial at 115200 baud
+3. Enter commands:
+
+```
+set_wifissid MyNetwork
+set_wifipwd MyPassword
+set_broker mqtts://yournamespace.eastus-1.ts.eventgrid.azure.net:8883
+```
+
+4. For certificates and keys, values must be **quoted** and use `\n` for newlines:
+
+```
+set_cacert "-----BEGIN CERTIFICATE-----\nMIIC...base64...\n-----END CERTIFICATE-----"
+set_clientcert "-----BEGIN CERTIFICATE-----\nMIIB...base64...\n-----END CERTIFICATE-----"
+set_clientkey "-----BEGIN EC PRIVATE KEY-----\nMIGk...base64...\n-----END EC PRIVATE KEY-----"
+```
+
+To convert a PEM file to a single-line string suitable for pasting:
+
+```bash
+# Linux/macOS
+awk 'NR>1{printf "\\n"} {printf "%s",$0}' cert.pem
+
+# PowerShell
+(Get-Content cert.pem -Raw).TrimEnd() -replace "`n","\n" -replace "`r",""
+```
+
+5. Use `status` to verify all settings are configured, and `exit` to reboot
+
+### Application Settings
+
+MQTT topics and timing intervals are set in `src/config.h`:
+
+```cpp
+static const char* PUBLISH_TOPIC = "testtopics/topic1";
+static const char* SUBSCRIBE_TOPIC = "testtopics/topic1";
+#define PUBLISH_INTERVAL_MS 5000
+```
+
+> **Note**: WiFi credentials, broker URL, and certificates are read from EEPROM at runtime. The `config.h` file is only for application-level settings like topics and intervals.
 
 ## Generating Certificates
 
@@ -111,16 +168,14 @@ pio device monitor
 ```
 === MXChip Secure MQTT Demo ===
 
-Sensors initialized
-Connecting to MyWiFi... OK
 IP: 192.168.1.100
 Connecting to broker.example.com:8883...
 MQTT connected!
 Subscribed to: testtopics/topic1
 Ready!
 
-[0] {"messageId":0,"temperature":24.50,"humidity":45.30,"pressure":1013.25,"deviceId":"Device1"}
-[1] {"messageId":1,"temperature":24.62,"humidity":44.80,"pressure":1013.30,"deviceId":"Device1"}
+[0] {"messageId":0,"deviceId":"Device1","temperature":24.50,"humidity":45.30,"pressure":1013.25,"accelerometer":{"x":10,"y":-5,"z":980},"gyroscope":{"x":100,"y":-200,"z":50},"magnetometer":{"x":150,"y":-300,"z":500}}
+[1] {"messageId":1,"deviceId":"Device1","temperature":24.62,"humidity":44.80,"pressure":1013.30,"accelerometer":{"x":12,"y":-3,"z":978},"gyroscope":{"x":95,"y":-210,"z":55},"magnetometer":{"x":148,"y":-305,"z":502}}
 
 [Message Received] testtopics/topic1: {"command":"hello"}
 ```
@@ -248,25 +303,78 @@ Permission bindings connect client groups to topic spaces with specific permissi
 
 ### 7. Update Device Configuration
 
-In `src/config.h`, set:
+Azure Event Grid uses **DigiCert Global Root G3** as its CA certificate.
+
+#### Using the Web UI (Recommended)
+
+1. Hold **Button B** + **Reset** to enter AP mode
+2. Connect to the device's WiFi AP and open `http://192.168.0.1`
+3. Fill in the form:
+
+| Field | Value |
+|-------|-------|
+| **Wi-Fi** | Select your network and enter the password |
+| **Broker URL** | `mqtts://yournamespace.eastus-1.ts.eventgrid.azure.net:8883` |
+| **CA Certificate** | Paste the DigiCert Global Root G3 certificate below |
+| **Client Certificate** | Paste your device's client certificate (PEM) |
+| **Client Private Key** | Paste your device's private key (PEM) |
+
+4. Click **Save Configuration**
+
+**DigiCert Global Root G3** — paste this into the CA Certificate field:
+
+```
+-----BEGIN CERTIFICATE-----
+MIICPzCCAcWgAwIBAgIQBVVWvPJepDU1w6QP1atFcjAKBggqhkjOPQQDAzBhMQsw
+CQYDVQQGEwJVUzEVMBMGA1UEChMMRGlnaUNlcnQgSW5jMRkwFwYDVQQLExB3d3cu
+ZGlnaWNlcnQuY29tMSAwHgYDVQQDExdEaWdpQ2VydCBHbG9iYWwgUm9vdCBHMzAe
+Fw0xMzA4MDExMjAwMDBaFw0zODAxMTUxMjAwMDBaMGExCzAJBgNVBAYTAlVTMRUw
+EwYDVQQKEwxEaWdpQ2VydCBJbmMxGTAXBgNVBAsTEHd3dy5kaWdpY2VydC5jb20x
+IDAeBgNVBAMTF0RpZ2lDZXJ0IEdsb2JhbCBSb290IEczMHYwEAYHKoZIzj0CAQYF
+K4EEACIDYgAE3afZu4q4C/sLfyHS8L6+c/MzXRq8NOrexpu80JX28MzQC7phW1FG
+fp4tn+6OYwwX7Adw9c+ELkCDnOg/QW07rdOkFFk2eJ0DQ+4QE2xy3q6Ip6FrtUPO
+Z9wj/wMco+I+o0IwQDAPBgNVHRMBAf8EBTADAQH/MA4GA1UdDwEB/wQEAwIBhjAd
+BgNVHQ4EFgQUs9tIpPmhxdiuNkHMEWNpYim8S8YwCgYIKoZIzj0EAwMDaAAwZQIx
+AK288mw/EkrRLTnDCgmXc/SINoyIJ7vmiI1Qhadj+Z4y3maTD/HMsQmP3Wyr+mt/
+oAIwOWZbwmSNuJ5Q3KjVSaLtx9zRSX8XAbjIho9OjIgrqJqpisXRAL34VOKa5Vt8
+sycX
+-----END CERTIFICATE-----
+```
+
+#### Using the CLI (Alternative)
+
+Hold **Button A** + **Reset**, connect at 115200 baud, then enter:
+
+```
+set_wifissid MyNetwork
+set_wifipwd MyPassword
+set_broker mqtts://yournamespace.eastus-1.ts.eventgrid.azure.net:8883
+set_cacert "-----BEGIN CERTIFICATE-----\nMIICPzCCAcWgAwIBAgIQBVVWvPJepDU1w6QP1atFcjAKBggqhkjOPQQDAzBhMQsw\nCQYDVQQGEwJVUzEVMBMGA1UEChMMRGlnaUNlcnQgSW5jMRkwFwYDVQQLExB3d3cu\nZGlnaWNlcnQuY29tMSAwHgYDVQQDExdEaWdpQ2VydCBHbG9iYWwgUm9vdCBHMzAe\nFw0xMzA4MDExMjAwMDBaFw0zODAxMTUxMjAwMDBaMGExCzAJBgNVBAYTAlVTMRUw\nEwYDVQQKEwxEaWdpQ2VydCBJbmMxGTAXBgNVBAsTEHd3dy5kaWdpY2VydC5jb20x\nIDAeBgNVBAMTF0RpZ2lDZXJ0IEdsb2JhbCBSb290IEczMHYwEAYHKoZIzj0CAQYF\nK4EEACIDYgAE3afZu4q4C/sLfyHS8L6+c/MzXRq8NOrexpu80JX28MzQC7phW1FG\nfp4tn+6OYwwX7Adw9c+ELkCDnOg/QW07rdOkFFk2eJ0DQ+4QE2xy3q6Ip6FrtUPO\nZ9wj/wMco+I+o0IwQDAPBgNVHRMBAf8EBTADAQH/MA4GA1UdDwEB/wQEAwIBhjAd\nBgNVHQ4EFgQUs9tIpPmhxdiuNkHMEWNpYim8S8YwCgYIKoZIzj0EAwMDaAAwZQIx\nAK288mw/EkrRLTnDCgmXc/SINoyIJ7vmiI1Qhadj+Z4y3maTD/HMsQmP3Wyr+mt/\noAIwOWZbwmSNuJ5Q3KjVSaLtx9zRSX8XAbjIho9OjIgrqJqpisXRAL34VOKa5Vt8\nsycX\n-----END CERTIFICATE-----"
+set_clientcert "<your client cert PEM with \n for newlines>"
+set_clientkey "<your client key PEM with \n for newlines>"
+exit
+```
+
+#### MQTT Topics
+
+In `src/config.h`, set the MQTT topics:
 
 ```cpp
-static const char* MQTT_HOST = "yournamespace.eastus-1.ts.eventgrid.azure.net";
-static const int MQTT_PORT = 8883;
-static const char* MQTT_CLIENT_ID = "Device1";  // Must match Client authentication name
 static const char* PUBLISH_TOPIC = "testtopics/topic1";
 static const char* SUBSCRIBE_TOPIC = "testtopics/topic1";
 ```
 
+> **Note**: The device ID (MQTT Client ID) is automatically extracted from the CN of your client certificate. It must match the Client authentication name configured in Event Grid.
+
 ### Verification Checklist
 
-- [ ] CA certificate uploaded and shows "Valid" status
+- [ ] CA certificate uploaded to Event Grid and shows "Valid" status
 - [ ] Client created with Subject Matches validation
-- [ ] Certificate CN matches the Client's certificate subject exactly
+- [ ] Client certificate CN matches the Client's certificate subject exactly
 - [ ] Client group includes your client (or use `$all`)
 - [ ] Topic space includes your publish/subscribe topics
 - [ ] Permission bindings grant Publisher and Subscriber access
-- [ ] MQTT_CLIENT_ID in config matches Client authentication name
+- [ ] Device CLI `status` shows all settings configured (broker, CA cert, client cert, client key)
 
 ## License
 

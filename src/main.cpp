@@ -13,17 +13,13 @@
 #include "OledDisplay.h"
 #include "RGB_LED.h"
 #include "config.h"
-#include "HTS221Sensor.h"
-#include "LPS22HBSensor.h"
 #include "DeviceConfig.h"
+#include "SensorManager.h"
 
 // Global objects
 static RGB_LED rgbLed;
 static WiFiClientSecure wifiClient;
 static PubSubClient mqttClient(wifiClient);
-static DevI2C *i2c;
-static HTS221Sensor *tempHumSensor;
-static LPS22HBSensor *pressureSensor;
 
 // State
 static int messageCount = 0;
@@ -107,23 +103,26 @@ void publishTelemetry()
 {
     if (!mqttClient.connected()) return;
     
-    float temp = 0, humidity = 0, pressure = 0;
-    tempHumSensor->getTemperature(&temp);
-    tempHumSensor->getHumidity(&humidity);
-    pressureSensor->getPressure(&pressure);
+    char sensorJson[512];
+    if (!Sensors.toJson(sensorJson, sizeof(sensorJson))) return;
     
-    char payload[256];
+    // Build final payload with messageId, deviceId, and all sensor data
+    char payload[640];
     snprintf(payload, sizeof(payload),
-        "{\"messageId\":%d,\"temperature\":%.2f,\"humidity\":%.2f,\"pressure\":%.2f,\"deviceId\":\"%s\"}",
-        messageCount++, temp, humidity, pressure, DeviceConfig_GetDeviceId());
+        "{\"messageId\":%d,\"deviceId\":\"%s\",%s",
+        messageCount++, DeviceConfig_GetDeviceId(), sensorJson + 1);  // skip leading '{' to merge objects
     
     if (mqttClient.publish(PUBLISH_TOPIC, payload))
     {
         Serial.printf("[%d] %s\n", messageCount - 1, payload);
         
+        float temp = Sensors.getTemperature();
+        float hum = Sensors.getHumidity();
+        float pres = Sensors.getPressure();
+        
         char line2[20], line3[20];
-        snprintf(line2, sizeof(line2), "T:%.1fC H:%.0f%%", temp, humidity);
-        snprintf(line3, sizeof(line3), "P:%.0f hPa", pressure);
+        snprintf(line2, sizeof(line2), "T:%.1fC H:%.0f%%", temp, hum);
+        snprintf(line3, sizeof(line3), "P:%.0f hPa", pres);
         updateDisplay(WiFi.localIP().get_address(), line2, line3);
         rgbLed.setBlue();
         delay(100);
@@ -144,15 +143,6 @@ void setup()
     updateDisplay("Secure MQTT", "Initializing...");
     Serial.println("\n=== MXChip Secure MQTT Demo ===\n");
     Serial.printf("Profile: %s\n", DeviceConfig_GetProfileName());
-    
-    // Initialize sensors
-    i2c = new DevI2C(D14, D15);
-    tempHumSensor = new HTS221Sensor(*i2c);
-    tempHumSensor->init(NULL);
-    tempHumSensor->enable();
-    pressureSensor = new LPS22HBSensor(*i2c);
-    pressureSensor->init(NULL);
-    Serial.println("Sensors initialized");
     
     // Connect to WiFi (uses EEPROM credentials via DeviceConfig)
     updateDisplay("Connecting WiFi", DeviceConfig_GetWifiSsid());
