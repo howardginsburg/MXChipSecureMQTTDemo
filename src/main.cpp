@@ -13,6 +13,8 @@
 #include "RGB_LED.h"
 #include "DeviceConfig.h"
 #include "SensorManager.h"
+#include "SystemTime.h"
+#include <time.h>
 
 #if CONNECTION_PROFILE == PROFILE_MQTT_USERPASS
   #include "AZ3166WiFiClient.h"
@@ -124,11 +126,16 @@ void publishTelemetry()
     char sensorJson[512];
     if (!Sensors.toJson(sensorJson, sizeof(sensorJson))) return;
     
-    // Build final payload with messageId, deviceId, and all sensor data
-    char payload[640];
+    // Get ISO 8601 timestamp
+    char timestamp[25];
+    time_t now = time(NULL);
+    strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%SZ", gmtime(&now));
+    
+    // Build final payload with messageId, deviceId, timestamp, and all sensor data
+    char payload[700];
     snprintf(payload, sizeof(payload),
-        "{\"messageId\":%d,\"deviceId\":\"%s\",%s",
-        messageCount++, DeviceConfig_GetDeviceId(), sensorJson + 1);  // skip leading '{' to merge objects
+        "{\"messageId\":%d,\"deviceId\":\"%s\",\"timestamp\":\"%s\",%s",
+        messageCount++, DeviceConfig_GetDeviceId(), timestamp, sensorJson + 1);  // skip leading '{' to merge objects
     
     if (mqttClient.publish(PUBLISH_TOPIC, payload))
     {
@@ -172,6 +179,10 @@ void setup()
     
     hasWifi = true;
     Serial.printf("IP: %s\n", WiFi.localIP().get_address());
+    
+    // Sync time via NTP
+    updateDisplay("Syncing time...");
+    SyncTime();
     
     // Connect to MQTT
     updateDisplay("Connecting MQTT", DeviceConfig_GetBrokerHost());
