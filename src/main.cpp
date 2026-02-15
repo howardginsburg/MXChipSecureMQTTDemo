@@ -8,16 +8,21 @@
  */
 
 #include <AZ3166WiFi.h>
-#include "AZ3166WifiClientSecure.h"
 #include <PubSubClient.h>
 #include "OledDisplay.h"
 #include "RGB_LED.h"
 #include "DeviceConfig.h"
 #include "SensorManager.h"
 
+#if CONNECTION_PROFILE == PROFILE_MQTT_USERPASS
+  #include "AZ3166WiFiClient.h"
+  static WiFiClient wifiClient;
+#else
+  #include "AZ3166WifiClientSecure.h"
+  static WiFiClientSecure wifiClient;
+#endif
 // Global objects
 static RGB_LED rgbLed;
-static WiFiClientSecure wifiClient;
 static PubSubClient mqttClient(wifiClient);
 
 // State
@@ -63,7 +68,7 @@ void messageCallback(char* topic, byte* payload, unsigned int length)
 }
 
 /**
- * Connect to MQTT broker with mutual TLS
+ * Connect to MQTT broker (profile-dependent: userpass, userpass+TLS, or mTLS)
  */
 bool connectMQTT()
 {
@@ -75,17 +80,31 @@ bool connectMQTT()
     wifiClient.stop();
     rgbLed.setYellow();
 
+#if CONNECTION_PROFILE == PROFILE_MQTT_USERPASS
+    // Plain TCP — no TLS configuration needed
+#elif CONNECTION_PROFILE == PROFILE_MQTT_USERPASS_TLS
+    wifiClient.setTimeout(2000);
+    wifiClient.setCACert(DeviceConfig_GetCACert());
+#elif CONNECTION_PROFILE == PROFILE_MQTT_MTLS
     wifiClient.setTimeout(2000);
     wifiClient.setCACert(DeviceConfig_GetCACert());
     wifiClient.setCertificate(DeviceConfig_GetClientCert());
     wifiClient.setPrivateKey(DeviceConfig_GetClientKey());
+#endif
 
     mqttClient.setServer(host, port);
     mqttClient.setKeepAlive(60);
     mqttClient.setSocketTimeout(30);
 
     const char* deviceId = DeviceConfig_GetDeviceId();
+
+#if CONNECTION_PROFILE == PROFILE_MQTT_USERPASS || CONNECTION_PROFILE == PROFILE_MQTT_USERPASS_TLS
+    char devicePassword[680];
+    DeviceConfig_Read(SETTING_DEVICE_PASSWORD, devicePassword, sizeof(devicePassword));
+    if (!mqttClient.connect(deviceId, deviceId, devicePassword))
+#else
     if (!mqttClient.connect(deviceId, deviceId, ""))
+#endif
     {
         Serial.printf("MQTT failed, state=%d\n", mqttClient.state());
         return false;

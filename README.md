@@ -1,17 +1,25 @@
 # MXChip AZ3166 Secure MQTT Demo
 
-A demonstration of mutual TLS (mTLS) MQTT connectivity on the MXChip AZ3166 IoT DevKit using X.509 client certificate authentication with full publish/subscribe support.
+A demonstration of MQTT connectivity on the MXChip AZ3166 IoT DevKit supporting three connection profiles: username/password, username/password over TLS, and mutual TLS (mTLS) with X.509 client certificate authentication.
 
 ## Features
 
-- **Mutual TLS Authentication** - Both client and server present certificates
-- **X.509 Client Certificates** - No username/password required  
-- **Bidirectional MQTT** - Full publish and subscribe support
-- **Real Sensor Data** - Temperature, humidity, and pressure from onboard sensors
+- **Multiple Connection Profiles** - Username/password, username/password + TLS, or mutual TLS
+- **Compile-Time Profile Selection** - Switch profiles via PlatformIO build environments
+- **Bidirectional MQTT** - Publish and optional subscribe support
+- **Real Sensor Data** - Temperature, humidity, pressure, accelerometer, gyroscope, and magnetometer
 - **Automatic Reconnection** - Handles WiFi and MQTT connection drops gracefully
-- **JSON Telemetry** - Publishes sensor data every 5 seconds
+- **JSON Telemetry** - Publishes sensor data at a configurable interval
 - **OLED Display** - Shows connection status, IP address, and telemetry data
 - **LED Status Indicators** - Visual feedback for connection state
+
+## Connection Profiles
+
+| Profile | Environment | Transport | Authentication |
+|---------|------------|-----------|----------------|
+| **Username/Password** | `mqtt_userpass` | Plain TCP | Device ID + password |
+| **Username/Password + TLS** | `mqtt_userpass_tls` | TLS (server CA cert) | Device ID + password |
+| **Mutual TLS** | `mqtt_mtls` | mTLS (CA + client cert + key) | X.509 client certificate |
 
 ## Sensors
 
@@ -62,26 +70,60 @@ The 128x64 OLED screen shows:
 
 - [PlatformIO](https://platformio.org/) IDE or CLI
 - MXChip AZ3166 IoT DevKit
-- MQTT broker with TLS and client certificate support (e.g., Azure Event Grid, Mosquitto)
-- X.509 certificates:
-  - CA certificate (root that signed the broker's cert)
-  - Client certificate
-  - Client private key
+- An MQTT broker appropriate for your chosen profile:
+  - **mqtt_userpass**: Any MQTT broker with username/password authentication
+  - **mqtt_userpass_tls**: MQTT broker with TLS and username/password (requires CA certificate)
+  - **mqtt_mtls**: MQTT broker with mutual TLS and X.509 client certificate support (e.g., Azure Event Grid, Mosquitto)
 
 ## Project Structure
 
 ```
 MXChipSecureMQTTDemo/
 ├── src/
-│   ├── main.cpp               # Main application code
-│   └── config.h               # MQTT topics and timing intervals
-├── platformio.ini             # PlatformIO configuration
+│   └── main.cpp               # Main application code
+├── platformio.ini             # PlatformIO configuration (profiles & build flags)
 └── README.md
 ```
 
 ## Configuration
 
+### Build Parameters
+
+MQTT topics, timing intervals, and the connection profile are configured as build flags in `platformio.ini`. The shared `[env]` section defines defaults inherited by all profiles:
+
+```ini
+[env]
+build_flags =
+    -DPUBLISH_INTERVAL_MS=5000
+    -DPUBLISH_TOPIC=\"testtopics/topic1\"
+    -DSUBSCRIBE_TOPIC=\"testtopics/topic1\"
+    -DWIFI_CHECK_INTERVAL=5000
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `PUBLISH_INTERVAL_MS` | `5000` | Telemetry publish interval in milliseconds |
+| `PUBLISH_TOPIC` | `"testtopics/topic1"` | MQTT topic for publishing telemetry |
+| `SUBSCRIBE_TOPIC` | `"testtopics/topic1"` | MQTT topic for subscribing (omit to disable subscribe) |
+| `WIFI_CHECK_INTERVAL` | `5000` | WiFi connectivity check interval in milliseconds |
+
+> **Note**: `SUBSCRIBE_TOPIC` is optional. If omitted from `build_flags`, the device will only publish and skip all subscription logic.
+
+### Device Settings (EEPROM)
+
 The MXChip stores all connection settings (WiFi, certificates, broker URL, etc.) in the STSAFE secure element's EEPROM. You configure the device using the **Web Configuration UI** (recommended) or the serial **Configuration CLI**.
+
+The EEPROM settings required depend on the connection profile:
+
+| Setting | mqtt_userpass | mqtt_userpass_tls | mqtt_mtls |
+|---------|:---:|:---:|:---:|
+| WiFi SSID & Password | Required | Required | Required |
+| Broker URL | Required | Required | Required |
+| Device ID | Required | Required | From cert CN |
+| Device Password | Required | Required | — |
+| CA Certificate | — | Required | Required |
+| Client Certificate | — | — | Required |
+| Client Private Key | — | — | Required |
 
 ### Web Configuration UI (Recommended)
 
@@ -91,12 +133,26 @@ The web UI is the easiest way to configure the device — paste certificates dir
 2. The OLED display shows the AP name (e.g., `AZ3166_XXXXXX`) and IP `192.168.0.1`
 3. Connect your computer/phone to the device's WiFi access point
 4. Open a browser and navigate to `http://192.168.0.1`
-5. Fill in the form:
+5. Fill in the form based on your connection profile:
+
+**All profiles:**
    - **Wi-Fi**: Select your network from the dropdown (or enter manually) and enter the password
-   - **Broker URL**: Your MQTT broker endpoint (e.g., `mqtts://yournamespace.eastus-1.ts.eventgrid.azure.net:8883`)
-   - **CA Certificate**: Paste the full PEM certificate including `-----BEGIN CERTIFICATE-----` and `-----END CERTIFICATE-----` lines
+   - **Broker URL**: Your MQTT broker endpoint (e.g., `mqtt://broker.example.com:1883` or `mqtts://broker.example.com:8883`)
+
+**mqtt_userpass and mqtt_userpass_tls — additionally:**
+   - **Device ID**: Your device/client identifier
+   - **Device Password**: The password for MQTT authentication
+
+**mqtt_userpass_tls — additionally:**
+   - **CA Certificate**: Paste the broker's CA certificate (PEM) including `-----BEGIN CERTIFICATE-----` and `-----END CERTIFICATE-----` lines
+
+**mqtt_mtls — additionally:**
+   - **CA Certificate**: Paste the broker's CA certificate (PEM)
    - **Client Certificate**: Paste your device's client certificate (PEM)
    - **Client Private Key**: Paste your device's private key (PEM)
+
+> **Note**: For `mqtt_mtls`, the Device ID is automatically extracted from the client certificate's CN — you do not need to set it manually.
+
 6. Click **Save Configuration** — the device will save to EEPROM and reboot
 
 ### Configuration CLI (Alternative)
@@ -105,23 +161,40 @@ For scripting or headless setups, use the serial console.
 
 1. Hold **Button A** while pressing **Reset** to enter configuration mode
 2. Connect via serial at 115200 baud
-3. Enter commands:
+3. Enter commands based on your connection profile:
 
+**All profiles:**
 ```
 set_wifissid MyNetwork
 set_wifipwd MyPassword
-set_broker mqtts://yournamespace.eastus-1.ts.eventgrid.azure.net:8883
+set_broker mqtt://broker.example.com:1883
 ```
 
-4. For certificates and keys, values must be **quoted** and use `\n` for newlines:
-
+**mqtt_userpass — additionally:**
 ```
+set_deviceid Device1
+set_devicepwd MyPassword
+```
+
+**mqtt_userpass_tls — additionally:**
+```
+set_deviceid Device1
+set_devicepwd MyPassword
+set_broker mqtts://broker.example.com:8883
+set_cacert "-----BEGIN CERTIFICATE-----\nMIIC...base64...\n-----END CERTIFICATE-----"
+```
+
+**mqtt_mtls — additionally:**
+```
+set_broker mqtts://broker.example.com:8883
 set_cacert "-----BEGIN CERTIFICATE-----\nMIIC...base64...\n-----END CERTIFICATE-----"
 set_clientcert "-----BEGIN CERTIFICATE-----\nMIIB...base64...\n-----END CERTIFICATE-----"
 set_clientkey "-----BEGIN EC PRIVATE KEY-----\nMIGk...base64...\n-----END EC PRIVATE KEY-----"
 ```
 
-To convert a PEM file to a single-line string suitable for pasting:
+> **Note**: For `mqtt_mtls`, you do not need to set the Device ID — it is extracted from the client certificate's CN.
+
+For certificates and keys, values must be **quoted** and use `\n` for newlines. To convert a PEM file to a single-line string suitable for pasting:
 
 ```bash
 # Linux/macOS
@@ -131,19 +204,11 @@ awk 'NR>1{printf "\\n"} {printf "%s",$0}' cert.pem
 (Get-Content cert.pem -Raw).TrimEnd() -replace "`n","\n" -replace "`r",""
 ```
 
-5. Use `status` to verify all settings are configured, and `exit` to reboot
+4. Use `status` to verify all settings are configured, and `exit` to reboot
 
 ### Application Settings
 
-MQTT topics and timing intervals are set in `src/config.h`:
-
-```cpp
-static const char* PUBLISH_TOPIC = "testtopics/topic1";
-static const char* SUBSCRIBE_TOPIC = "testtopics/topic1";
-#define PUBLISH_INTERVAL_MS 5000
-```
-
-> **Note**: WiFi credentials, broker URL, and certificates are read from EEPROM at runtime. The `config.h` file is only for application-level settings like topics and intervals.
+MQTT topics and timing intervals are configured as build flags in `platformio.ini` (see [Build Parameters](#build-parameters) above).
 
 ## Generating Certificates
 
@@ -152,12 +217,20 @@ https://github.com/howardginsburg/CertificateGenerator
 
 ## Building and Uploading
 
-```bash
-# Build the project
-pio run
+Build a specific profile using the `-e` flag:
 
-# Upload to the device
-pio run --target upload
+```bash
+# Build with username/password (no TLS)
+pio run -e mqtt_userpass
+
+# Build with username/password over TLS
+pio run -e mqtt_userpass_tls
+
+# Build with mutual TLS (client certificate)
+pio run -e mqtt_mtls
+
+# Upload to the device (specify the profile)
+pio run -e mqtt_mtls --target upload
 
 # Monitor serial output
 pio device monitor
@@ -196,14 +269,15 @@ Ready!
 ### Common Issues
 
 **Error 5 (Not authorized)**
-- Verify client certificate CN matches the client ID
-- Check CA certificate is registered with the broker
+- Verify username and password are correct (mqtt_userpass, mqtt_userpass_tls)
+- Verify client certificate CN matches the client ID (mqtt_mtls)
+- Check CA certificate is registered with the broker (mqtt_userpass_tls, mqtt_mtls)
 - For Azure Event Grid: ensure permission bindings are configured
 
-**TLS Handshake Failure**
+**TLS Handshake Failure** (mqtt_userpass_tls, mqtt_mtls)
 - Verify CA certificate is correct
 - Check certificate expiration dates
-- Ensure private key matches client certificate
+- Ensure private key matches client certificate (mqtt_mtls)
 
 **WiFi Connection Failed**
 - Verify SSID and password
@@ -357,12 +431,7 @@ exit
 
 #### MQTT Topics
 
-In `src/config.h`, set the MQTT topics:
-
-```cpp
-static const char* PUBLISH_TOPIC = "testtopics/topic1";
-static const char* SUBSCRIBE_TOPIC = "testtopics/topic1";
-```
+MQTT topics are configured as build flags in `platformio.ini` (see [Build Parameters](#build-parameters)).
 
 > **Note**: The device ID (MQTT Client ID) is automatically extracted from the CN of your client certificate. It must match the Client authentication name configured in Event Grid.
 
