@@ -12,7 +12,6 @@
 #include <PubSubClient.h>
 #include "OledDisplay.h"
 #include "RGB_LED.h"
-#include "config.h"
 #include "DeviceConfig.h"
 #include "SensorManager.h"
 
@@ -166,9 +165,11 @@ void setup()
     hasMqtt = true;
     updateLEDs();
     
+#ifdef SUBSCRIBE_TOPIC
     mqttClient.setCallback(messageCallback);
     mqttClient.subscribe(SUBSCRIBE_TOPIC);
     Serial.printf("Subscribed to: %s\n", SUBSCRIBE_TOPIC);
+#endif
     
     updateDisplay("Ready", WiFi.localIP().get_address(), DeviceConfig_GetDeviceId());
     Serial.println("Ready!\n");
@@ -217,7 +218,9 @@ void loop()
         {
             hasMqtt = true;
             updateLEDs();
+#ifdef SUBSCRIBE_TOPIC
             mqttClient.subscribe(SUBSCRIBE_TOPIC);
+#endif
         }
         else
         {
