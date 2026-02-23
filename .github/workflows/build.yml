@@ -9,6 +9,10 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: [mqtt_userpass, mqtt_userpass_tls, mqtt_mtls]
 
     steps:
       - name: Checkout repository
@@ -25,18 +29,23 @@ jobs:
           path: |
             ~/.platformio/.cache
             ~/.platformio/packages
-          key: ${{ runner.os }}-pio-${{ hashFiles('platformio.ini') }}
+          key: ${{ runner.os }}-pio-${{ matrix.environment }}-${{ hashFiles('platformio.ini') }}
           restore-keys: |
-            ${{ runner.os }}-pio-
+            ${{ runner.os }}-pio-${{ matrix.environment }}-
 
       - name: Install PlatformIO
         run: pip install platformio
 
-      - name: Build all environments
+      - name: Build ${{ matrix.environment }}
+        run: pio run -e ${{ matrix.environment }}
+
+      - name: Verify firmware.bin was produced
         run: |
-          pio run -e mqtt_userpass
-          pio run -e mqtt_userpass_tls
-          pio run -e mqtt_mtls
+          if [ ! -f ".pio/build/${{ matrix.environment }}/firmware.bin" ]; then
+            echo "ERROR: firmware.bin not found for ${{ matrix.environment }}"
+            exit 1
+          fi
+          echo "firmware.bin found for ${{ matrix.environment }}: $(du -sh .pio/build/${{ matrix.environment }}/firmware.bin)"
 
       - name: Download bootloader tools from framework
         run: |
@@ -46,18 +55,16 @@ jobs:
           curl -fsSL -o bootloader/az5155_patch_binary.py \
             https://github.com/howardginsburg/framework-arduinostm32mxchip/raw/refs/heads/main/bootloader/az5155_patch_binary.py
 
-      - name: Create standalone binaries
+      - name: Create standalone binary
         run: |
           cd bootloader
-          for env in mqtt_userpass mqtt_userpass_tls mqtt_mtls; do
-            cp ../.pio/build/${env}/firmware.bin firmware.bin
-            python3 az5155_patch_binary.py firmware.bin ${env}_firmware.bin
-            echo "Built ${env}_firmware.bin"
-          done
+          cp ../.pio/build/${{ matrix.environment }}/firmware.bin firmware.bin
+          python3 az5155_patch_binary.py firmware.bin ${{ matrix.environment }}_firmware.bin
+          echo "Built ${{ matrix.environment }}_firmware.bin: $(du -sh ${{ matrix.environment }}_firmware.bin)"
 
-      - name: Upload firmware artifacts
+      - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
-          name: firmware-binaries
-          path: bootloader/*_firmware.bin
+          name: ${{ matrix.environment }}-firmware
+          path: bootloader/${{ matrix.environment }}_firmware.bin
           if-no-files-found: error

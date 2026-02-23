@@ -20,7 +20,7 @@
   #include "AZ3166WiFiClient.h"
   static WiFiClient wifiClient;
 #else
-  #include "AZ3166WifiClientSecure.h"
+  #include "AZ3166WiFiClientSecure.h"
   static WiFiClientSecure wifiClient;
 #endif
 // Global objects
