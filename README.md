@@ -168,7 +168,12 @@ For scripting or headless setups, use the serial console.
 set_wifissid MyNetwork
 set_wifipwd MyPassword
 set_broker mqtt://broker.example.com:1883
+set_publishtopic testtopics/topic1
+set_subscribetopic testtopics/topic1
+set_sendinterval 5
 ```
+
+> **Note**: `set_sendinterval` takes a value in **seconds**. `set_subscribetopic` is optional — omit it to disable subscribing.
 
 **mqtt_userpass — additionally:**
 ```
@@ -208,7 +213,7 @@ awk 'NR>1{printf "\\n"} {printf "%s",$0}' cert.pem
 
 ### Application Settings
 
-MQTT topics and timing intervals are configured as build flags in `platformio.ini` (see [Build Parameters](#build-parameters) above).
+MQTT topics and the publish interval are stored in EEPROM and set via the Web UI or CLI (`set_publishtopic`, `set_subscribetopic`, `set_sendinterval`). See [Build Parameters](#build-parameters) for the WiFi check interval.
 
 ## Generating Certificates
 

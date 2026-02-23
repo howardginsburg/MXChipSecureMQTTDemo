@@ -137,7 +137,10 @@ void publishTelemetry()
         "{\"messageId\":%d,\"deviceId\":\"%s\",\"timestamp\":\"%s\",%s",
         messageCount++, DeviceConfig_GetDeviceId(), timestamp, sensorJson + 1);  // skip leading '{' to merge objects
     
-    if (mqttClient.publish(PUBLISH_TOPIC, payload))
+    const char* publishTopic = DeviceConfig_GetPublishTopic();
+    if (publishTopic[0] == '\0') return;
+
+    if (mqttClient.publish(publishTopic, payload))
     {
         Serial.printf("[%d] %s\n", messageCount - 1, payload);
         
@@ -157,6 +160,8 @@ void publishTelemetry()
 
 void setup()
 {
+
+
     Serial.begin(115200);
     delay(500);
     
@@ -167,7 +172,29 @@ void setup()
     
     updateDisplay("Secure MQTT", "Initializing...");
     Serial.println("\n=== MXChip Secure MQTT Demo ===\n");
-    Serial.printf("Profile: %s\n", DeviceConfig_GetProfileName());
+    Serial.printf("Profile:          %s\n", DeviceConfig_GetProfileName());
+    Serial.printf("WiFi SSID:        %s\n", DeviceConfig_GetWifiSsid());
+    Serial.printf("WiFi password len:%d\n", (int)strlen(DeviceConfig_GetWifiPassword()));
+    Serial.printf("Broker host:      %s\n", DeviceConfig_GetBrokerHost());
+    Serial.printf("Broker port:      %d\n", DeviceConfig_GetBrokerPort());
+    Serial.printf("Device ID:        %s\n", DeviceConfig_GetDeviceId());
+    Serial.printf("Send interval:    %d s\n", DeviceConfig_GetSendInterval());
+    Serial.printf("Publish topic:    \"%s\"\n", DeviceConfig_GetPublishTopic());
+    Serial.printf("Subscribe topic:  \"%s\"\n", DeviceConfig_GetSubscribeTopic());
+#if CONNECTION_PROFILE == PROFILE_MQTT_USERPASS || CONNECTION_PROFILE == PROFILE_MQTT_USERPASS_TLS
+    {
+        char _pw[680];
+        DeviceConfig_Read(SETTING_DEVICE_PASSWORD, _pw, sizeof(_pw));
+        Serial.printf("Device password len:%d\n", (int)strlen(_pw));
+    }
+#endif
+#if CONNECTION_PROFILE == PROFILE_MQTT_USERPASS_TLS || CONNECTION_PROFILE == PROFILE_MQTT_MTLS
+    Serial.printf("CA cert len:      %d\n", (int)strlen(DeviceConfig_GetCACert()));
+#endif
+#if CONNECTION_PROFILE == PROFILE_MQTT_MTLS
+    Serial.printf("Client cert len:  %d\n", (int)strlen(DeviceConfig_GetClientCert()));
+    Serial.printf("Client key len:   %d\n", (int)strlen(DeviceConfig_GetClientKey()));
+#endif
     
     // Connect to WiFi (uses EEPROM credentials via DeviceConfig)
     updateDisplay("Connecting WiFi", DeviceConfig_GetWifiSsid());
@@ -195,11 +222,12 @@ void setup()
     hasMqtt = true;
     updateLEDs();
     
-#ifdef SUBSCRIBE_TOPIC
-    mqttClient.setCallback(messageCallback);
-    mqttClient.subscribe(SUBSCRIBE_TOPIC);
-    Serial.printf("Subscribed to: %s\n", SUBSCRIBE_TOPIC);
-#endif
+    if (DeviceConfig_GetSubscribeTopic()[0] != '\0')
+    {
+        mqttClient.setCallback(messageCallback);
+        mqttClient.subscribe(DeviceConfig_GetSubscribeTopic());
+        Serial.printf("Subscribed to: %s\n", DeviceConfig_GetSubscribeTopic());
+    }
     
     updateDisplay("Ready", WiFi.localIP().get_address(), DeviceConfig_GetDeviceId());
     Serial.println("Ready!\n");
@@ -212,7 +240,7 @@ void loop()
     unsigned long now = millis();
     
     // Check WiFi periodically
-    if (now - lastWiFiCheck >= WIFI_CHECK_INTERVAL)
+    if (now - lastWiFiCheck >= 5000)
     {
         lastWiFiCheck = now;
         hasWifi = (WiFi.status() == WL_CONNECTED);
@@ -248,9 +276,8 @@ void loop()
         {
             hasMqtt = true;
             updateLEDs();
-#ifdef SUBSCRIBE_TOPIC
-            mqttClient.subscribe(SUBSCRIBE_TOPIC);
-#endif
+        if (DeviceConfig_GetSubscribeTopic()[0] != '\0')
+            mqttClient.subscribe(DeviceConfig_GetSubscribeTopic());
         }
         else
         {
@@ -260,7 +287,7 @@ void loop()
     }
     
     // Publish telemetry
-    if (now - lastPublish >= PUBLISH_INTERVAL_MS)
+    if (now - lastPublish >= (unsigned long)DeviceConfig_GetSendInterval() * 1000)
     {
         lastPublish = now;
         publishTelemetry();
