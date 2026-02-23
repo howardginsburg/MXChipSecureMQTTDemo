@@ -95,6 +95,7 @@ bool connectMQTT()
 #endif
 
     mqttClient.setServer(host, port);
+    mqttClient.setBufferSize(1024);
     mqttClient.setKeepAlive(60);
     mqttClient.setSocketTimeout(30);
 
@@ -170,8 +171,8 @@ void setup()
     pinMode(LED_AZURE, OUTPUT);
     pinMode(LED_USER, OUTPUT);
     
-    updateDisplay("Secure MQTT", "Initializing...");
-    Serial.println("\n=== MXChip Secure MQTT Demo ===\n");
+    updateDisplay("MQTT", "Initializing...");
+    Serial.println("\n=== MXChip MQTT Demo ===\n");
     Serial.printf("Profile:          %s\n", DeviceConfig_GetProfileName());
     Serial.printf("WiFi SSID:        %s\n", DeviceConfig_GetWifiSsid());
     Serial.printf("WiFi password len:%d\n", (int)strlen(DeviceConfig_GetWifiPassword()));
