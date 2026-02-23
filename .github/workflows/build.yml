@@ -1,0 +1,63 @@
+name: Build Firmware
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Cache PlatformIO packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio/.cache
+            ~/.platformio/packages
+          key: ${{ runner.os }}-pio-${{ hashFiles('platformio.ini') }}
+          restore-keys: |
+            ${{ runner.os }}-pio-
+
+      - name: Install PlatformIO
+        run: pip install platformio
+
+      - name: Build all environments
+        run: |
+          pio run -e mqtt_userpass
+          pio run -e mqtt_userpass_tls
+          pio run -e mqtt_mtls
+
+      - name: Download bootloader tools from framework
+        run: |
+          mkdir -p bootloader
+          curl -fsSL -o bootloader/boot.bin \
+            https://github.com/howardginsburg/framework-arduinostm32mxchip/raw/refs/heads/main/bootloader/boot.bin
+          curl -fsSL -o bootloader/az5155_patch_binary.py \
+            https://github.com/howardginsburg/framework-arduinostm32mxchip/raw/refs/heads/main/bootloader/az5155_patch_binary.py
+
+      - name: Create standalone binaries
+        run: |
+          cd bootloader
+          for env in mqtt_userpass mqtt_userpass_tls mqtt_mtls; do
+            cp ../.pio/build/${env}/firmware.bin firmware.bin
+            python3 az5155_patch_binary.py firmware.bin ${env}_firmware.bin
+            echo "Built ${env}_firmware.bin"
+          done
+
+      - name: Upload firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-binaries
+          path: bootloader/*_firmware.bin
+          if-no-files-found: error
